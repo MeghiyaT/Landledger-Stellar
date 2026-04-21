@@ -1,0 +1,42 @@
+/* Design System Tokens - 8-point spacing scale */
+
+:root {
+  /* Spacing Scale (8px base) */
+  --spacing-1: 8px;
+  --spacing-2: 16px;
+  --spacing-3: 24px;
+  --spacing-4: 32px;
+  --spacing-5: 40px;
+  --spacing-6: 48px;
+  --spacing-8: 64px;
+  --spacing-10: 80px;
+  --spacing-12: 96px;
+  --spacing-16: 128px;
+
+  /* Colors */
+  --color-primary: #1E293B;
+  --color-secondary: #059669;
+  --color-accent: #DC2626;
+  --color-gray-900: #0F172A;
+  --color-gray-700: #334155;
+  --color-gray-400: #94A3B8;
+  --color-gray-100: #F1F5F9;
+  --color-white: #FFFFFF;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+
+  /* Border Radius */
+  --radius-base: 8px;
+
+  /* Shadows */
+  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-elevated: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-modal: 0 20px 25px rgba(0, 0, 0, 0.15);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+

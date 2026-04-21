@@ -1,0 +1,85 @@
+// Supabase Edge Function to send emails via Resend
+// Deploy this function to handle email sending server-side (avoids CORS issues)
+
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { Resend } from 'https://esm.sh/resend@2.0.0'
+
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
+const EMAIL_FROM = Deno.env.get('EMAIL_FROM') || 'onboarding@resend.dev'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  // Log function invocation
+  console.log('📧 Edge Function invoked:', {
+    method: req.method,
+    hasApiKey: !!RESEND_API_KEY,
+    emailFrom: EMAIL_FROM,
+  })
+
+  try {
+    if (!RESEND_API_KEY) {
+      console.error('❌ RESEND_API_KEY secret is not set!')
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'Resend API key not configured. Please set RESEND_API_KEY secret in Edge Function settings.' 
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const body = await req.json()
+    console.log('📧 Request body received:', { to: body.to, subject: body.subject })
+
+    const { to, subject, html, text, from } = body
+
+    if (!to || !subject || !html) {
+      console.error('❌ Missing required fields:', { to: !!to, subject: !!subject, html: !!html })
+      return new Response(
+        JSON.stringify({ success: false, error: 'Missing required fields: to, subject, html' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    console.log('📧 Sending email via Resend...')
+    const resend = new Resend(RESEND_API_KEY)
+
+    const result = await resend.emails.send({
+      from: from || EMAIL_FROM,
+      to,
+      subject,
+      html,
+      text: text || html.replace(/<[^>]*>/g, ''),
+    })
+
+    if (result.error) {
+      console.error('❌ Resend API error:', result.error)
+      return new Response(
+        JSON.stringify({ success: false, error: result.error }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    console.log('✅ Email sent successfully:', result.data?.id)
+    return new Response(
+      JSON.stringify({ success: true, data: result.data }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
+  } catch (error) {
+    console.error('❌ Edge Function error:', error)
+    return new Response(
+      JSON.stringify({ success: false, error: error.message || 'Unknown error' }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
+  }
+})
+

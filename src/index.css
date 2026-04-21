@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import './styles/design-tokens.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-gray-900 font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  h1 {
+    @apply text-[48px] leading-[56px] font-semibold;
+  }
+
+  h2 {
+    @apply text-[36px] leading-[44px] font-semibold;
+  }
+
+  h3 {
+    @apply text-[30px] leading-[38px] font-semibold;
+  }
+
+  h4 {
+    @apply text-[24px] leading-[32px] font-semibold;
+  }
+
+  h5 {
+    @apply text-[20px] leading-[28px] font-semibold;
+  }
+
+  p {
+    @apply text-base leading-6;
+  }
+}
+
+@layer utilities {
+  .text-body-large {
+    @apply text-[18px] leading-[28px];
+  }
+
+  .text-body-small {
+    @apply text-[14px] leading-[20px];
+  }
+
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.3s ease-out;
+  }
+}
+
