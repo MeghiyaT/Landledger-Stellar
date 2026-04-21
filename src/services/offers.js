@@ -1,6 +1,4 @@
 import { supabase } from '../lib/supabase'
-import { createOfferOnChain } from './contracts'
-import { ethers } from 'ethers'
 import { inrToTokens } from '../utils/tokenConversion'
 import { notifyOfferReceived, notifyOfferAccepted, notifyOfferRejected, notifyPropertySold, notifyPropertyPurchased } from './notifications'
 
@@ -62,48 +60,10 @@ export const createOffer = async (offerData) => {
   try {
     console.log('Creating offer with data:', offerData)
     
-    // Try to create on-chain offer first (if property has blockchain_property_id)
+    // In our new Stellar model, offers begin securely in Supabase.
+    // Escrow/Payment happens later when the buyer initiates payment via Dashboard.
     let blockchainOfferId = null
     let blockchainTxHash = null
-    
-    // Check if property has blockchain ID (need to fetch property first)
-    try {
-      const { data: property } = await supabase
-        .from('properties')
-        .select('blockchain_property_id')
-        .eq('id', offerData.property_id)
-        .single()
-      
-      if (property?.blockchain_property_id) {
-        try {
-          // Convert offer amount to wei (assuming price is in ETH equivalent)
-          // For now, we'll use the offer amount directly as ETH
-          const offerAmountInEth = offerData.offer_amount / 1000000 // Rough conversion, adjust as needed
-          const offerAmountInWei = ethers.parseEther(offerAmountInEth.toString())
-          const duration = 7 * 24 * 60 * 60 // 7 days
-          
-          const tx = await createOfferOnChain(
-            property.blockchain_property_id,
-            offerAmountInWei,
-            offerData.message || '',
-            duration
-          )
-          
-          const receipt = await tx.wait()
-          blockchainTxHash = receipt.hash
-          
-          // Extract offer ID from event if possible
-          // For now, we'll store the tx hash and query later
-          console.log('On-chain offer created:', blockchainTxHash)
-        } catch (blockchainError) {
-          console.error('Blockchain offer creation failed:', blockchainError)
-          // Continue with Supabase offer (graceful fallback)
-        }
-      }
-    } catch (propertyError) {
-      console.error('Error fetching property for blockchain offer:', propertyError)
-      // Continue with Supabase offer
-    }
     
     // Create offer in Supabase (always happens)
     const offerDataWithBlockchain = {
@@ -336,48 +296,9 @@ export const acceptOfferAndCreateTransaction = async (offerId, userId) => {
       }
     }
 
-    // Create token-based escrow if this is a purchase offer and wallets are connected
+    // We intentionally DO NOT create the escrow here, because the SELLER is accepting the offer.
+    // The buyer will explicitly create the escrow (depositing XLM) from their Dashboard later.
     let escrowData = null
-    if (offer.offer_type === 'purchase') {
-      try {
-        // Check if both buyer and seller have wallets
-        const { supabaseStorage } = await import('../lib/supabaseStorage')
-        const [buyerProfile, sellerProfile] = await Promise.all([
-          supabaseStorage.from('profiles').select('wallet_address').eq('id', offer.buyer_id).single(),
-          supabaseStorage.from('profiles').select('wallet_address').eq('id', offer.seller_id).single()
-        ])
-
-        if (buyerProfile.data?.wallet_address && sellerProfile.data?.wallet_address) {
-          // Convert offer amount to tokens (100 INR = 1 PROP token)
-          const amountInTokens = inrToTokens(offer.offer_amount)
-          
-          // Create token escrow
-          const { createEscrowTransaction } = await import('./escrow')
-          const escrowResult = await createEscrowTransaction(
-            offer.property_id,
-            offer.seller_id,
-            offer.buyer_id,
-            amountInTokens,
-            30 // 30 days deadline
-          )
-
-          if (escrowResult.data) {
-            escrowData = {
-              escrow_tx_hash: escrowResult.data.escrowTxHash,
-              escrow_transaction_id: escrowResult.data.escrowTransactionId,
-              escrow_type: 'token'
-            }
-            console.log('Token escrow created successfully:', escrowResult.data)
-          } else {
-            console.error('Escrow creation failed:', escrowResult.error)
-            // Continue without escrow - transaction will still be created
-          }
-        }
-      } catch (escrowError) {
-        console.error('Error creating escrow:', escrowError)
-        // Continue without escrow - transaction will still be created
-      }
-    }
 
     // Create transaction for buyer
     const buyerTransaction = {

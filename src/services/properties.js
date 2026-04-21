@@ -97,6 +97,8 @@ const applySortOrder = (query, sortBy) => {
 const isMissingColumnError = (error) =>
   error &&
   (error.message?.includes('removed_at') ||
+    error.message?.includes('sold_at') ||
+    error.message?.includes('sold_to') ||
     error.code === '42703' ||
     error.code === 'PGRST116')
 
@@ -106,15 +108,19 @@ const isMissingColumnError = (error) =>
 
 export const getProperties = async (filters = {}) => {
   // Uses buildVisiblePropertiesQuery as the single source of truth for visibility logic
-  const runQuery = async (withRemovedAt) => {
-    // Start from the shared visibility query (excludes removed + sold by default)
-    let query = withRemovedAt
-      ? buildVisiblePropertiesQuery(false, false)
-      : supabase
-          .from('properties')
-          .select('*')
-          .or('status.is.null,status.eq.active')
-          .is('sold_at', null)
+  const runQuery = async (useAdvancedFiltering) => {
+    let query = supabase.from('properties').select('*')
+
+    if (useAdvancedFiltering) {
+      // Full query with removed_at and sold_at
+      query = query
+        .is('removed_at', null)
+        .is('sold_at', null)
+        .or('status.is.null,status.eq.active')
+    } else {
+      // Basic query for compatibility if columns are missing
+      query = query.or('status.is.null,status.eq.active')
+    }
 
     query = applyPropertyFilters(query, filters)
     query = applySortOrder(query, filters.sortBy)
@@ -125,12 +131,18 @@ export const getProperties = async (filters = {}) => {
   let { data, error } = await runQuery(true)
 
   if (isMissingColumnError(error)) {
-    console.log('removed_at column not found, filtering by status only')
+    console.log('Detected missing columns (removed_at or sold_at). Falling back to basic filtering.')
     ;({ data, error } = await runQuery(false))
   }
 
   if (error) {
-    console.error('Error in getProperties:', error)
+    console.error('Error in getProperties:', {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      filters
+    })
   } else {
     console.log(`getProperties: Found ${data?.length || 0} properties (filtered out removed/paused)`)
   }

@@ -105,18 +105,18 @@ const BlockchainOwnershipHistory = ({ property, className = '' }) => {
               </div>
             </div>
             <a
-              href={`https://sepolia.etherscan.io/address/${entry.previousOwner}`}
+              href={`https://stellar.expert/explorer/testnet/account/${entry.previousOwner}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-blue-600 hover:text-blue-800 underline mt-2 inline-block"
             >
-              View on Etherscan
+              View on StellarExpert
             </a>
           </div>
         ))}
       </div>
       <p className="text-xs text-gray-500 mt-3">
-        This ownership history is permanently recorded on the Sepolia blockchain and cannot be altered.
+        This ownership history is permanently recorded on the Stellar Testnet and cannot be altered.
       </p>
     </div>
   )

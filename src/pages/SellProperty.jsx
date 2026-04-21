@@ -15,7 +15,7 @@ import { useToast } from '../hooks/useToast'
 import Toast from '../components/ui/Toast'
 import { PROPERTY_PLACEHOLDER } from '../utils/placeholders'
 import { registerPropertyOnChain, mintPropertyNFT, getContractAddresses } from '../services/contracts'
-import { ethers } from 'ethers'
+// No ethers needed for Stellar
 import useWallet from '../hooks/useWallet'
 import TokenConversionInfo from '../components/TokenConversionInfo'
 import { inrToTokens } from '../utils/tokenConversion'
@@ -832,15 +832,14 @@ const SellProperty = () => {
       // Only try blockchain registration if conditions are met (OPTIONAL)
       if (shouldRegisterOnBlockchain && canRegisterOnBlockchain && currentWalletAddress) {
         try {
-          // Convert price to wei (ETH) - use form price or original price
+          // Convert price appropriately - use form price or original price
           const priceToUse = formData.price ? parseFloat(formData.price) : (originalProperty?.price || 0)
-          const priceInWei = ethers.parseEther(priceToUse.toString())
           
           success('Registering property on blockchain...')
           const blockchainResult = await registerPropertyOnChain(
             formData.title,
             formData.location || formData.address,
-            priceInWei
+            BigInt(Math.floor(priceToUse))
           )
         
           if (blockchainResult.propertyId) {
@@ -1157,7 +1156,7 @@ const SellProperty = () => {
                         Blockchain Registration Required
                       </h3>
                       <p className="text-xs text-blue-800 mt-1">
-                        All properties are automatically registered on the Ethereum blockchain for permanent, verifiable ownership records.
+                        All properties are automatically registered on the Stellar blockchain for permanent, verifiable ownership records.
                       </p>
                       {!isMetaMaskInstalled && (
                         <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">

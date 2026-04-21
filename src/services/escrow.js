@@ -1,293 +1,144 @@
-import { createEscrowToken, completeEscrow, cancelEscrow } from './contracts'
+import { createEscrowXLM, completeEscrowOnChain } from './contracts'
 import { createTransaction, updateTransactionStatus } from './transactions'
 import { supabase } from '../lib/supabase'
-import { ethers } from 'ethers'
-import { notifyAmountDeducted, notifyAmountReceived } from './notifications'
 
 /**
- * Create an escrow transaction for a property purchase using PROP tokens
- * @param {string} propertyId - Property ID from Supabase
- * @param {string} sellerId - Seller user ID
- * @param {string} buyerId - Buyer user ID  
- * @param {number} amountInTokens - Amount in PROP tokens
- * @param {number} deadlineDays - Number of days until deadline
- * @returns {Promise<{data: object, error: object}>}
+ * Create a Stellar Escrow for property purchase
  */
-export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amountInTokens, deadlineDays = 30) => {
+export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amountInXlm, deadlineDays = 30, pendingTransactionId = null) => {
   try {
-    // Get seller's wallet address from profile
     const { supabaseStorage } = await import('../lib/supabaseStorage')
-    const { data: sellerProfile } = await supabaseStorage
-      .from('profiles')
-      .select('wallet_address')
-      .eq('id', sellerId)
-      .single()
+    
+    // Fetch profiles for public keys
+    const [{ data: seller }, { data: buyer }] = await Promise.all([
+      supabaseStorage.from('profiles').select('wallet_address').eq('id', sellerId).single(),
+      supabaseStorage.from('profiles').select('wallet_address').eq('id', buyerId).single()
+    ])
 
-    if (!sellerProfile?.wallet_address) {
-      return {
-        data: null,
-        error: { message: 'Seller wallet address not found. Seller must connect their wallet.' }
-      }
+    if (!seller?.wallet_address || !buyer?.wallet_address) {
+      throw new Error('Both buyer and seller must have Stellar wallets connected.')
     }
 
-    // Get buyer's wallet address
-    const { data: buyerProfile } = await supabaseStorage
-      .from('profiles')
-      .select('wallet_address')
-      .eq('id', buyerId)
-      .single()
-
-    if (!buyerProfile?.wallet_address) {
-      return {
-        data: null,
-        error: { message: 'Buyer wallet address not found. Buyer must connect their wallet.' }
-      }
-    }
-
-    // Get property blockchain ID if available
     const { data: property } = await supabase
       .from('properties')
       .select('blockchain_property_id')
       .eq('id', propertyId)
       .single()
 
-    const blockchainPropertyId = property?.blockchain_property_id || '0' // Use 0 if not on-chain
-
-    // Calculate deadline timestamp
+    const propertyIdOnChain = property?.blockchain_property_id || '0'
     const deadline = Math.floor(Date.now() / 1000) + (deadlineDays * 24 * 60 * 60)
 
-    // Convert token amount to wei (18 decimals)
-    const amountInWei = ethers.parseEther(amountInTokens.toString())
-
-    // Approve tokens first (buyer needs to approve escrow contract to spend tokens)
-    const { approvePropertyTokens } = await import('./contracts')
-    
-    // Get contract addresses - use the same method as contracts.js
-    const getContractAddresses = async () => {
-      try {
-        const response = await fetch('/deployment-addresses.json')
-        if (response.ok) {
-          const data = await response.json()
-          return data.contracts
-        }
-      } catch (error) {
-        console.log('Could not load deployment-addresses.json, using env variables')
-      }
-      return {
-        Escrow: import.meta.env.VITE_ESCROW_ADDRESS,
-      }
-    }
-    
-    const addresses = await getContractAddresses()
-    if (!addresses.Escrow) {
-      return {
-        data: null,
-        error: { message: 'Escrow contract address not configured' }
-      }
-    }
-
-    // Approve escrow contract to spend tokens
-    try {
-      const approveTx = await approvePropertyTokens(addresses.Escrow, amountInWei)
-      await approveTx.wait()
-      console.log('Token approval successful')
-    } catch (approveError) {
-      console.error('Token approval failed:', approveError)
-      return {
-        data: null,
-        error: { message: `Failed to approve tokens: ${approveError.message || 'Please approve token spending in MetaMask'}` }
-      }
-    }
-
-    // Create token escrow on blockchain
-    const tx = await createEscrowToken(
-      blockchainPropertyId,
-      sellerProfile.wallet_address,
-      amountInWei,
+    // Call Soroban Escrow
+    const result = await createEscrowXLM(
+      propertyIdOnChain,
+      seller.wallet_address,
+      amountInXlm,
       deadline
     )
 
-    const receipt = await tx.wait()
-    const escrowTxHash = receipt.hash
+    // If we have a pending transaction ID, fetch the transaction to get its offer_id
+    let offerId = null;
+    let sellerTxId = null;
+    if (pendingTransactionId) {
+      const { data: pendingTx } = await supabase
+        .from('transactions')
+        .select('metadata')
+        .eq('id', pendingTransactionId)
+        .single();
+      offerId = pendingTx?.metadata?.offer_id;
 
-    // Notify buyer about token deduction
-    try {
-      await notifyAmountDeducted(
-        buyerId,
-        amountInTokens,
-        `Escrow created for property purchase`,
-        escrowTxHash
-      )
-    } catch (notifError) {
-      console.error('Error creating deduction notification:', notifError)
-    }
-
-    // Extract escrow transaction ID from events
-    let escrowTransactionId = null
-    try {
-      const { ethers } = await import('ethers')
-      const ESCROW_ABI = [
-        'event EscrowCreated(uint256 indexed transactionId, uint256 indexed propertyId, address indexed buyer, address seller, uint256 amount, bool isTokenPayment)'
-      ]
-      const iface = new ethers.Interface(ESCROW_ABI)
-      const event = receipt.logs.find(log => {
-        try {
-          const parsed = iface.parseLog(log)
-          return parsed && parsed.name === 'EscrowCreated'
-        } catch {
-          return false
-        }
-      })
-      
-      if (event) {
-        const parsed = iface.parseLog(event)
-        escrowTransactionId = parsed.args.transactionId.toString()
+      if (offerId) {
+        // Find the corresponding seller transaction for the same offer
+        const { data: sellerTxData } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('user_id', sellerId)
+          .eq('transaction_type', 'sale')
+          .contains('metadata', { offer_id: offerId })
+          .single();
+        sellerTxId = sellerTxData?.id;
       }
-    } catch (error) {
-      console.error('Error parsing escrow event:', error)
     }
 
-    // Create transaction record in Supabase
-    const transactionData = {
-      user_id: buyerId,
-      property_id: propertyId,
-      transaction_type: 'purchase',
-      amount: amountInTokens, // Store in tokens (already converted from INR)
-      currency: 'PROP',
+    const updateData = {
       status: 'in_progress',
-      description: `Token escrow transaction for property purchase - ${amountInTokens.toLocaleString('en-IN', { maximumFractionDigits: 4 })} PROP tokens locked in escrow`,
-      blockchain_tx_hash: escrowTxHash,
-      metadata: {
-        escrow_type: 'token',
-        escrow_transaction_id: escrowTransactionId,
-        deadline,
-        seller_wallet: sellerProfile.wallet_address,
-        buyer_wallet: buyerProfile.wallet_address,
-        amount_in_wei: amountInWei.toString(),
-        amount_in_tokens: amountInTokens.toString(), // Store for easy reference
-      }
+      blockchain_tx_hash: result.hash,
+      description: `XLM Escrow created for property purchase. Funds locked on Stellar Testnet.`,
+      updated_at: new Date().toISOString()
     }
-
-    const { data: transaction, error: transactionError } = await createTransaction(transactionData)
-
-    if (transactionError) {
-      return { data: null, error: transactionError }
-    }
-
-    return {
-      data: {
-        transaction,
-        escrowTxHash,
-        escrowTransactionId,
-      },
-      error: null
+    
+    // We update the metadata while preserving existing data (like offer_id)
+    if (pendingTransactionId) {
+        const { data: currentTx } = await supabase.from('transactions').select('metadata').eq('id', pendingTransactionId).single();
+        updateData.metadata = {
+          ...currentTx?.metadata,
+          escrow_type: 'native',
+          escrow_transaction_id: 'stellar-escrow',
+          deadline,
+          seller_wallet: seller.wallet_address,
+          buyer_wallet: buyer.wallet_address,
+        }
+        
+        // Update buyer tx
+        await supabase.from('transactions').update(updateData).eq('id', pendingTransactionId);
+        
+        // Update seller tx
+        if (sellerTxId) {
+            const { data: currentSellerTx } = await supabase.from('transactions').select('metadata').eq('id', sellerTxId).single();
+            await supabase.from('transactions').update({
+                ...updateData,
+                metadata: {
+                    ...currentSellerTx?.metadata,
+                    ...updateData.metadata
+                }
+            }).eq('id', sellerTxId);
+        }
+        
+        return { data: { hash: result.hash }, error: null }
+    } else {
+        // Fallback: create new transaction
+        const transactionData = {
+          user_id: buyerId,
+          property_id: propertyId,
+          transaction_type: 'purchase',
+          amount: amountInXlm,
+          currency: 'XLM',
+          ...updateData,
+          metadata: {
+            escrow_type: 'native',
+            escrow_transaction_id: 'stellar-escrow',
+            deadline,
+            seller_wallet: seller.wallet_address,
+            buyer_wallet: buyer.wallet_address,
+          }
+        }
+        return await createTransaction(transactionData)
     }
   } catch (error) {
-    console.error('Error creating escrow transaction:', error)
-    return {
-      data: null,
-      error: { message: error.message || 'Failed to create escrow transaction' }
-    }
+    console.error('Error creating Stellar escrow:', error)
+    return { data: null, error: { message: error.message } }
   }
 }
 
 /**
- * Complete an escrow transaction
- * @param {string} transactionId - Transaction ID from Supabase
- * @param {string} userId - User ID (must be seller)
- * @returns {Promise<{data: object, error: object}>}
+ * Complete Stellar Escrow
  */
 export const completeEscrowTransaction = async (transactionId, userId) => {
   try {
-    // Get transaction with escrow info
-    const { supabase } = await import('../lib/supabase')
-    const { data: transaction, error: fetchError } = await supabase
+    const { data: transaction } = await supabase
       .from('transactions')
       .select('*')
       .eq('id', transactionId)
       .single()
 
-    if (fetchError || !transaction) {
-      return { data: null, error: fetchError || { message: 'Transaction not found' } }
-    }
-
-    if (transaction.metadata?.escrow_transaction_id) {
-      // Complete escrow on blockchain
-      const tx = await completeEscrow(transaction.metadata.escrow_transaction_id)
-      const receipt = await tx.wait()
-
-      // Notify seller about token receipt
-      try {
-        await notifyAmountReceived(
-          userId,
-          transaction.amount,
-          `Property sale completed`,
-          receipt.hash
-        )
-      } catch (notifError) {
-        console.error('Error creating receipt notification:', notifError)
-      }
-
-      // Update transaction status
+    if (transaction?.metadata?.escrow_transaction_id) {
+      await completeEscrowOnChain(transaction.metadata.escrow_transaction_id)
       return await updateTransactionStatus(transactionId, 'completed', userId)
-    } else {
-      return {
-        data: null,
-        error: { message: 'No escrow transaction ID found' }
-      }
     }
+    
+    throw new Error('Missing escrow tracking ID.')
   } catch (error) {
-    console.error('Error completing escrow:', error)
-    return {
-      data: null,
-      error: { message: error.message || 'Failed to complete escrow' }
-    }
+    console.error('Error completing Stellar escrow:', error)
+    return { data: null, error: { message: error.message } }
   }
 }
-
-/**
- * Cancel an escrow transaction
- * @param {string} transactionId - Transaction ID from Supabase
- * @param {string} userId - User ID (must be buyer)
- * @returns {Promise<{data: object, error: object}>}
- */
-export const cancelEscrowTransaction = async (transactionId, userId) => {
-  try {
-    // Get transaction with escrow info
-    const { supabase } = await import('../lib/supabase')
-    const { data: transaction, error: fetchError } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('id', transactionId)
-      .single()
-
-    if (fetchError || !transaction) {
-      return { data: null, error: fetchError || { message: 'Transaction not found' } }
-    }
-
-    if (transaction.user_id !== userId) {
-      return { data: null, error: { message: 'Only the buyer can cancel escrow' } }
-    }
-
-    if (transaction.metadata?.escrow_transaction_id) {
-      // Cancel escrow on blockchain
-      const tx = await cancelEscrow(transaction.metadata.escrow_transaction_id)
-      await tx.wait()
-
-      // Update transaction status
-      return await updateTransactionStatus(transactionId, 'failed', userId)
-    } else {
-      return {
-        data: null,
-        error: { message: 'No escrow transaction ID found' }
-      }
-    }
-  } catch (error) {
-    console.error('Error cancelling escrow:', error)
-    return {
-      data: null,
-      error: { message: error.message || 'Failed to cancel escrow' }
-    }
-  }
-}
-

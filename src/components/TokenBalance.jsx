@@ -1,47 +1,17 @@
 import PropTypes from 'prop-types'
-import { useEffect, useState } from 'react'
-import { getPropertyTokenBalance } from '../services/contracts'
 import useWallet from '../hooks/useWallet'
 import Skeleton from './ui/Skeleton'
 import TokenConversionInfo from './TokenConversionInfo'
 
 const TokenBalance = ({ className = '' }) => {
-  const { walletAddress, isSepolia } = useWallet()
-  const [balance, setBalance] = useState(null)
-  const [isLoading, setIsLoading] = useState(false)
-
-  useEffect(() => {
-    const loadBalance = async () => {
-      if (!walletAddress || !isSepolia) {
-        setBalance(null)
-        return
-      }
-
-      setIsLoading(true)
-      try {
-        const tokenBalance = await getPropertyTokenBalance(walletAddress)
-        setBalance(tokenBalance)
-      } catch (error) {
-        console.error('Error loading token balance:', error)
-        setBalance(null)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    loadBalance()
-  }, [walletAddress, isSepolia])
+  const { walletAddress, isSepolia, balance, isLoadingBalance } = useWallet()
 
   if (!walletAddress || !isSepolia) {
     return null
   }
 
-  if (isLoading) {
+  if (isLoadingBalance) {
     return <Skeleton width="w-24" height="h-6" className={className} />
-  }
-
-  if (balance === null) {
-    return null
   }
 
   return (
@@ -49,9 +19,10 @@ const TokenBalance = ({ className = '' }) => {
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium text-gray-700">XLM:</span>
         <span className="text-sm font-semibold text-primary">
-          {parseFloat(balance).toLocaleString('en-US', {
-            maximumFractionDigits: 2,
-          })}
+          {balance ? parseFloat(balance).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 4,
+          }) : '0.00'}
         </span>
       </div>
       <TokenConversionInfo variant="compact" />

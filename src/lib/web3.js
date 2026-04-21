@@ -1,19 +1,26 @@
-import { ethers } from 'ethers'
+import * as StellarSdk from '@stellar/stellar-sdk'
+import {
+  isConnected,
+  isAllowed,
+  getPublicKey,
+  getNetwork,
+  signTransaction,
+} from '@stellar/freighter-api'
 
-// Sepolia Testnet Chain ID (decimal)
-export const SEPOLIA_CHAIN_ID_DECIMAL = 11155111
-export const SEPOLIA_CHAIN_ID_HEX = '0xaa36a7' // 11155111 in hex
+// Stellar Testnet Configuration
+export const HORIZON_URL = 'https://horizon-testnet.stellar.org'
+export const STELLAR_NETWORK = 'TESTNET'
 
 /**
- * Check if MetaMask is installed
+ * Check if Freighter is installed (Replaces MetaMask check)
  * @returns {boolean}
  */
 export const isMetaMaskInstalled = () => {
-  return typeof window !== 'undefined' && typeof window.ethereum !== 'undefined'
+  return typeof window !== 'undefined' && window.freighter !== undefined
 }
 
 /**
- * Check if the current network is Sepolia testnet
+ * Check if the current network is Stellar Testnet
  * @returns {Promise<boolean>}
  */
 export const isSepoliaNetwork = async () => {
@@ -22,13 +29,8 @@ export const isSepoliaNetwork = async () => {
   }
 
   try {
-    const chainId = await window.ethereum.request({
-      method: 'eth_chainId',
-    })
-    
-    // Convert hex chain ID to decimal and compare
-    const chainIdDecimal = parseInt(chainId, 16)
-    return chainIdDecimal === SEPOLIA_CHAIN_ID_DECIMAL
+    const network = await getNetwork()
+    return network === 'TESTNET'
   } catch (error) {
     console.error('Error checking network:', error)
     return false
@@ -36,208 +38,92 @@ export const isSepoliaNetwork = async () => {
 }
 
 /**
- * Switch to Sepolia testnet
- * @returns {Promise<void>}
+ * Placeholder for network switching (Freighter doesn't support programmatic switching yet)
  */
 export const switchToSepolia = async () => {
   if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
+    throw new Error('Freighter wallet is not installed')
   }
-
-  try {
-    await window.ethereum.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
-    })
-  } catch (switchError) {
-    // This error code indicates that the chain has not been added to MetaMask
-    if (switchError.code === 4902) {
-      try {
-        await window.ethereum.request({
-          method: 'wallet_addEthereumChain',
-          params: [
-            {
-              chainId: SEPOLIA_CHAIN_ID_HEX,
-              chainName: 'Sepolia Test Network',
-              nativeCurrency: {
-                name: 'SepoliaETH',
-                symbol: 'ETH',
-                decimals: 18,
-              },
-              rpcUrls: ['https://rpc.sepolia.org'],
-              blockExplorerUrls: ['https://sepolia.etherscan.io'],
-            },
-          ],
-        })
-      } catch (addError) {
-        throw new Error('Failed to add Sepolia network to MetaMask')
-      }
-    } else {
-      throw switchError
-    }
-  }
+  throw new Error('Please manually switch to TESTNET in your Freighter settings.')
 }
 
 /**
- * Get ETH balance for an address
- * @param {string} address - Ethereum address
- * @returns {Promise<string>} Balance in ETH (as string)
+ * Get XLM balance for a Stellar address
+ * @param {string} address - Stellar public key
+ * @returns {Promise<string>} Balance in XLM
  */
 export const getBalance = async (address) => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
-  }
-
   try {
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const balance = await provider.getBalance(address)
-    // Convert from wei to ETH
-    return ethers.formatEther(balance)
+    const server = new StellarSdk.Horizon.Server(HORIZON_URL)
+    const account = await server.loadAccount(address)
+    const nativeBalance = account.balances.find((b) => b.asset_type === 'native')
+    return nativeBalance ? nativeBalance.balance : '0.0000000'
   } catch (error) {
-    console.error('Error getting balance:', error)
-    throw error
+    console.error('Error getting XLM balance:', error)
+    return '0.0000000'
   }
 }
 
 /**
- * Send a transaction (ETH transfer)
- * @param {string} toAddress - Recipient address
- * @param {string|number} amountInEth - Amount in ETH
- * @returns {Promise<ethers.TransactionResponse>}
+ * Send a native XLM transaction
+ * @param {string} toAddress - Recipient public key
+ * @param {string|number} amountInXlm - Amount in XLM
+ * @returns {Promise<string>} Transaction hash
  */
-export const sendTransaction = async (toAddress, amountInEth) => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
+export const sendTransaction = async (toAddress, amountInXlm) => {
+  if (!(await isAllowed())) {
+    throw new Error('Freighter access not allowed')
   }
 
-  try {
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const signer = await provider.getSigner()
-    
-    const tx = await signer.sendTransaction({
-      to: toAddress,
-      value: ethers.parseEther(amountInEth.toString()),
-    })
-    
-    return tx
-  } catch (error) {
-    console.error('Error sending transaction:', error)
-    throw error
-  }
+  const senderPublicKey = await getPublicKey()
+  const server = new StellarSdk.Horizon.Server(HORIZON_URL)
+  const account = await server.loadAccount(senderPublicKey)
+
+  const transaction = new StellarSdk.TransactionBuilder(account, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: StellarSdk.Networks.TESTNET,
+  })
+    .addOperation(
+      StellarSdk.Operation.payment({
+        destination: toAddress,
+        asset: StellarSdk.Asset.native(),
+        amount: amountInXlm.toString(),
+      })
+    )
+    .setTimeout(30)
+    .build()
+
+  const signedTx = await signTransaction(transaction.toXDR(), {
+    network: 'TESTNET',
+  })
+
+  const result = await server.submitTransaction(
+    StellarSdk.TransactionBuilder.fromXDR(signedTx, StellarSdk.Networks.TESTNET)
+  )
+  return result.hash
 }
 
 /**
- * Wait for a transaction to be mined
- * @param {string} txHash - Transaction hash
- * @returns {Promise<ethers.TransactionReceipt>}
+ * Format XLM amount for display
+ * @param {string|number} amount 
+ * @returns {string} 
  */
-export const waitForTransaction = async (txHash) => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
-  }
-
-  try {
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const receipt = await provider.waitForTransaction(txHash)
-    return receipt
-  } catch (error) {
-    console.error('Error waiting for transaction:', error)
-    throw error
-  }
+export const formatEth = (amount) => {
+  return parseFloat(amount || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 7,
+  })
 }
 
-/**
- * Get transaction receipt
- * @param {string} txHash - Transaction hash
- * @returns {Promise<ethers.TransactionReceipt | null>}
- */
-export const getTransactionReceipt = async (txHash) => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
-  }
-
-  try {
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const receipt = await provider.getTransactionReceipt(txHash)
-    return receipt
-  } catch (error) {
-    console.error('Error getting transaction receipt:', error)
-    throw error
-  }
+// Minimal placeholder exports to satisfy existing imports until we refactor them
+export const getSigner = async () => ({})
+export const getContract = async () => ({})
+export const getContractReadOnly = async () => ({})
+export const waitForTransaction = async (hash) => {
+  const server = new StellarSdk.Horizon.Server(HORIZON_URL)
+  return await server.operations().forTransaction(hash).call()
 }
-
-/**
- * Format ETH amount for display
- * @param {string|bigint} amountInWei - Amount in wei
- * @returns {string} Formatted amount in ETH
- */
-export const formatEth = (amountInWei) => {
-  try {
-    return ethers.formatEther(amountInWei)
-  } catch (error) {
-    console.error('Error formatting ETH:', error)
-    return '0'
-  }
+export const getTransactionReceipt = async (hash) => {
+  const server = new StellarSdk.Horizon.Server(HORIZON_URL)
+  return await server.transactions().transaction(hash).call()
 }
-
-/**
- * Get a signer instance for sending transactions
- * @returns {Promise<ethers.JsonRpcSigner>}
- */
-export const getSigner = async () => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
-  }
-
-  try {
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const signer = await provider.getSigner()
-    return signer
-  } catch (error) {
-    console.error('Error getting signer:', error)
-    throw error
-  }
-}
-
-/**
- * Get a contract instance with signer (for write operations)
- * @param {string} contractAddress - Contract address
- * @param {Array|string} abi - Contract ABI
- * @returns {Promise<ethers.Contract>}
- */
-export const getContract = async (contractAddress, abi) => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
-  }
-
-  try {
-    const signer = await getSigner()
-    const contract = new ethers.Contract(contractAddress, abi, signer)
-    return contract
-  } catch (error) {
-    console.error('Error getting contract:', error)
-    throw error
-  }
-}
-
-/**
- * Get a read-only contract instance (for read operations)
- * @param {string} contractAddress - Contract address
- * @param {Array|string} abi - Contract ABI
- * @returns {Promise<ethers.Contract>}
- */
-export const getContractReadOnly = async (contractAddress, abi) => {
-  if (!isMetaMaskInstalled()) {
-    throw new Error('MetaMask is not installed')
-  }
-
-  try {
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const contract = new ethers.Contract(contractAddress, abi, provider)
-    return contract
-  } catch (error) {
-    console.error('Error getting read-only contract:', error)
-    throw error
-  }
-}
-

@@ -26,20 +26,32 @@ export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
       if (clerkTokenGetter) {
         try {
           token = await clerkTokenGetter({ template: 'supabase' })
-        } catch {
-          // Supabase JWT template not configured — fall back to the default
-          // Clerk session token. RLS policies that check sub() will still work.
-          try {
-            token = await clerkTokenGetter()
-          } catch {
-            // No token available (user not signed in)
-          }
+        } catch (err) {
+          // Template 'supabase' not found in Clerk. 
+          // We don't fall back to standard token here because it often causes 
+          // PGRST301 (Invalid JWT) if Supabase is not configured to accept it.
+          // The request will proceed without an Authorization header (as a public user).
+          console.warn('⚠️ Clerk Supabase template not found. Authenticated requests will use public access.')
         }
       }
 
-      const headers = {
-        ...(options.headers || {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // Clone original headers (handles both plain object and Headers instance)
+      const headers = new Headers(options.headers || {})
+      if (token && typeof token === 'string') {
+        headers.set('Authorization', `Bearer ${token}`)
+      }
+
+      // If url is a Request object, we must handle it differently
+      if (url instanceof Request) {
+        // We can't just pass a new headers object if we want to preserve other things,
+        // but fetch(Request) is supported. 
+        // We might need to clone it or create a new one.
+        return fetch(new Request(url, { ...options, headers }))
+      }
+
+      if (typeof url !== 'string' || !url) {
+        console.error('❌ Supabase fetch called with invalid URL:', url)
+        return new Response(JSON.stringify({ error: 'Invalid URL' }), { status: 400 })
       }
 
       return fetch(url, { ...options, headers })

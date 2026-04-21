@@ -1,39 +1,27 @@
-import { useEffect, useState } from 'react'
-import { transferPropertyTokens } from '../services/contracts'
-import { ethers } from 'ethers'
+import { useState } from 'react'
+import { sendTransaction } from '../lib/web3'
 import useWallet from '../hooks/useWallet'
-import { getPropertyTokenBalance } from '../services/contracts'
 import Input from './ui/Input'
 import Button from './ui/Button'
 import { useToast } from '../hooks/useToast'
 
+/**
+ * TokenTransfer component for sending native XLM tokens on Stellar Testnet
+ */
 const TokenTransfer = ({ className = '' }) => {
-  const { walletAddress, isSepolia } = useWallet()
+  const { walletAddress, isSepolia, balance, loadBalance } = useWallet()
   const { success, error } = useToast()
   const [recipientAddress, setRecipientAddress] = useState('')
   const [amount, setAmount] = useState('')
   const [isTransferring, setIsTransferring] = useState(false)
-  const [balance, setBalance] = useState(null)
-
-  // Load balance when component mounts or wallet changes
-  useEffect(() => {
-    const loadBalance = async () => {
-      if (walletAddress && isSepolia) {
-        try {
-          const tokenBalance = await getPropertyTokenBalance(walletAddress)
-          setBalance(tokenBalance)
-        } catch (err) {
-          console.error('Error loading balance:', err)
-        }
-      }
-    }
-    loadBalance()
-  }, [walletAddress, isSepolia])
 
   const validateAddress = (address) => {
     if (!address) return 'Recipient address is required'
-    if (!ethers.isAddress(address)) return 'Invalid Ethereum address'
-    if (address.toLowerCase() === walletAddress?.toLowerCase()) {
+    // Basic Stellar address validation (starts with G, 56 characters)
+    if (!/^G[A-Z2-7]{55}$/.test(address)) {
+      return 'Invalid Stellar address'
+    }
+    if (address === walletAddress) {
       return 'Cannot transfer to your own address'
     }
     return null
@@ -46,7 +34,7 @@ const TokenTransfer = ({ className = '' }) => {
       return 'Amount must be a positive number'
     }
     if (balance !== null && numAmount > parseFloat(balance)) {
-      return `Insufficient balance. You have ${parseFloat(balance).toLocaleString('en-US', { maximumFractionDigits: 4 })} PROP tokens`
+      return `Insufficient balance. You have ${parseFloat(balance).toLocaleString('en-US', { maximumFractionDigits: 7 })} XLM`
     }
     return null
   }
@@ -68,39 +56,29 @@ const TokenTransfer = ({ className = '' }) => {
     setIsTransferring(true)
 
     try {
-      // Convert token amount to wei (18 decimals)
-      const amountInWei = ethers.parseEther(amount.toString())
+      success('Initiating transfer in Freighter...')
+      
+      // Execute transfer using the web3 helper
+      const hash = await sendTransaction(recipientAddress, amount)
 
-      // Execute transfer
-      const tx = await transferPropertyTokens(recipientAddress, amountInWei)
-
-      // Wait for transaction to be mined
-      const receipt = await tx.wait()
-
-      if (receipt.status === 1) {
+      if (hash) {
         success(
-          `Successfully transferred ${parseFloat(amount).toLocaleString('en-US', { maximumFractionDigits: 4 })} PROP tokens to ${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}`
+          `Successfully transferred ${parseFloat(amount).toLocaleString('en-US', { maximumFractionDigits: 4 })} XLM to ${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}`
         )
         // Reset form
         setRecipientAddress('')
         setAmount('')
+        
         // Reload balance
-        if (walletAddress) {
-          const newBalance = await getPropertyTokenBalance(walletAddress)
-          setBalance(newBalance)
-        }
+        setTimeout(() => {
+          loadBalance()
+        }, 2000)
       } else {
-        error('Transaction failed')
+        error('Transaction failed or was rejected')
       }
     } catch (err) {
       console.error('Transfer error:', err)
-      if (err.reason) {
-        error(`Transfer failed: ${err.reason}`)
-      } else if (err.message) {
-        error(`Transfer failed: ${err.message}`)
-      } else {
-        error('Transfer failed. Please try again.')
-      }
+      error(`Transfer failed: ${err.message || 'Please try again'}`)
     } finally {
       setIsTransferring(false)
     }
@@ -112,29 +90,29 @@ const TokenTransfer = ({ className = '' }) => {
 
   return (
     <div className={className}>
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">Transfer PROP Tokens</h3>
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">Transfer XLM Tokens</h3>
       <div className="space-y-4">
         <Input
-          label="Recipient Address"
+          label="Recipient Stellar Address"
           type="text"
-          placeholder="0x..."
+          placeholder="G..."
           value={recipientAddress}
           onChange={(e) => setRecipientAddress(e.target.value)}
-          helperText="Enter the Ethereum wallet address to receive tokens"
+          helperText="Enter the Stellar public key to receive tokens"
         />
 
         <Input
-          label="Amount (PROP Tokens)"
+          label="Amount (XLM)"
           type="number"
-          step="0.0001"
+          step="0.0000001"
           min="0"
           placeholder="0.0"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           helperText={
             balance !== null
-              ? `Your balance: ${parseFloat(balance).toLocaleString('en-US', { maximumFractionDigits: 4 })} PROP`
-              : 'Enter the amount of tokens to transfer'
+              ? `Your balance: ${parseFloat(balance).toLocaleString('en-US', { maximumFractionDigits: 7 })} XLM`
+              : 'Enter the amount of XLM to transfer'
           }
         />
 
@@ -145,16 +123,18 @@ const TokenTransfer = ({ className = '' }) => {
           disabled={!recipientAddress || !amount || isTransferring}
           className="w-full"
         >
-          Transfer Tokens
+          Transfer XLM
         </Button>
 
-        <p className="text-xs text-gray-600">
-          ⚠️ Make sure you're on Sepolia testnet. This will execute a blockchain transaction that requires gas fees.
-        </p>
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded">
+          <p className="text-xs text-blue-800">
+            ℹ️ You are on Stellar Testnet. This will execute a real blockchain transaction. 
+            XLM is the native currency of the Stellar network.
+          </p>
+        </div>
       </div>
     </div>
   )
 }
 
 export default TokenTransfer
-

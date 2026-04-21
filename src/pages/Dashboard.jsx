@@ -8,6 +8,7 @@ import { getInquiriesByUserId, updateInquiryStatus, getInquiryReplies, createInq
 import { getTransactions } from '../services/transactions'
 import { getOffersBySellerId, getOffersByBuyerId, updateOfferStatus, acceptOfferAndCreateTransaction } from '../services/offers'
 import { updateTransactionStatus } from '../services/transactions'
+import { createEscrowTransaction } from '../services/escrow'
 import { downloadRegistrationCertificate } from '../utils/pdfGenerator'
 import useWallet from '../hooks/useWallet'
 import Container from '../components/layout/Container'
@@ -491,6 +492,36 @@ const Dashboard = () => {
     } catch (err) {
       console.error('Error updating offer:', err)
       error('An error occurred')
+    }
+  }
+
+  const handleCreateEscrowAndPay = async (transaction) => {
+    if (!walletAddress) {
+      error('Please connect your Freighter wallet to pay with XLM.')
+      return
+    }
+    try {
+      success('Initiating escrow transaction in Freighter...')
+      
+      const response = await createEscrowTransaction(
+        transaction.property_id,
+        transaction.metadata?.seller_id,
+        transaction.metadata?.buyer_id || user.id,
+        transaction.amount,
+        30,
+        transaction.id
+      )
+      
+      if (response.error) {
+        error(`Failed to lock funds: ${response.error.message}`)
+        return
+      }
+      
+      success('Funds successfully locked in escrow!')
+      await loadData()
+    } catch (err) {
+      console.error('Error creating escrow:', err)
+      error('An error occurred during payment.')
     }
   }
 
@@ -2219,7 +2250,7 @@ const Dashboard = () => {
                     <li>Database transactions (offers, purchases, sales)</li>
                     <li>Blockchain transactions (if wallet connected)</li>
                     <li>Token payments with XLM tokens</li>
-                    <li>ETH payments for property purchases</li>
+                    <li>XLM payments for property purchases</li>
                     <li>Ownership transfers on blockchain</li>
                     <li>Escrow transactions (created/completed)</li>
                   </ul>
@@ -2336,19 +2367,38 @@ const Dashboard = () => {
                         </p>
                         {!transaction.metadata?.is_blockchain_only && transaction.status === 'pending' && (
                           <div className="mt-3 flex gap-2">
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              onClick={() => handleTransactionStatusUpdate(transaction.id, 'in_progress')}
-                            >
-                              Mark as In Progress
-                            </Button>
+                            {(() => {
+                              let isBuyer = transaction.transaction_type === 'purchase';
+                              let isSeller = transaction.transaction_type === 'sale';
+                              if (transaction.transaction_type === 'rental') {
+                                isSeller = transaction.metadata?.seller_id === user?.id || myProperties.some(p => p.id === transaction.property_id);
+                                isBuyer = !isSeller;
+                              }
+                              
+                              if (isBuyer) {
+                                return (
+                                  <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => handleCreateEscrowAndPay(transaction)}
+                                  >
+                                    Pay with XLM
+                                  </Button>
+                                );
+                              } else {
+                                return (
+                                  <p className="text-xs text-gray-500 italic py-2">
+                                    Awaiting buyer payment
+                                  </p>
+                                );
+                              }
+                            })()}
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleTransactionStatusUpdate(transaction.id, 'failed')}
                             >
-                              Mark as Failed
+                              Cancel
                             </Button>
                           </div>
                         )}
@@ -2409,7 +2459,7 @@ const Dashboard = () => {
                         )}
                         {!transaction.blockchain_tx_hash && 
                          !transaction.metadata?.is_blockchain_only && 
-                         (transaction.currency === 'XLM' || transaction.currency === 'ETH') && (
+                         (transaction.currency === 'XLM') && (
                           <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
                             <p className="text-xs text-yellow-800 mb-2">
                               This transaction should have a blockchain record. If you completed this transaction on-chain, it may not be linked yet.
@@ -2434,9 +2484,9 @@ const Dashboard = () => {
                                   </span>
                                 )}
                               </>
-                            ) : transaction.currency === 'ETH' ? (
+                            ) : transaction.currency === 'XLM' ? (
                               <>
-                                {transaction.amount ? parseFloat(transaction.amount).toLocaleString('en-IN', { maximumFractionDigits: 6 }) : 'N/A'} ETH
+                                {transaction.amount ? parseFloat(transaction.amount).toLocaleString('en-IN', { maximumFractionDigits: 6 }) : 'N/A'} XLM
                               </>
                             ) : transaction.currency === 'BLOCKCHAIN' ? (
                               <>
@@ -2453,9 +2503,9 @@ const Dashboard = () => {
                               Token Payment
                             </Badge>
                           )}
-                          {transaction.currency === 'ETH' && (
+                          {transaction.currency === 'XLM' && (
                             <Badge variant="primary" className="text-xs mt-1">
-                              ETH Payment
+                              XLM Payment
                             </Badge>
                           )}
                         </div>
@@ -2473,7 +2523,7 @@ const Dashboard = () => {
                               <div className="flex items-start gap-2">
                                 <span className="text-xs text-gray-500 min-w-[80px]">Tx Hash:</span>
                                 <a
-                                  href={`https://sepolia.etherscan.io/tx/${transaction.blockchain_tx_hash}`}
+                                  href={`https://stellar.expert/explorer/testnet/tx/${transaction.blockchain_tx_hash}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-xs text-blue-600 hover:text-blue-800 underline break-all flex-1"
@@ -2483,9 +2533,9 @@ const Dashboard = () => {
                               </div>
                               {transaction.metadata?.block_number && (
                                 <div className="flex items-center gap-2">
-                                  <span className="text-xs text-gray-500 min-w-[80px]">Block:</span>
+                                  <span className="text-xs text-gray-500 min-w-[80px]">Ledger:</span>
                                   <a
-                                    href={`https://sepolia.etherscan.io/block/${transaction.metadata.block_number}`}
+                                    href={`https://stellar.expert/explorer/testnet/ledger/${transaction.metadata.block_number}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-xs text-blue-600 hover:text-blue-800 underline"
@@ -2522,7 +2572,7 @@ const Dashboard = () => {
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-gray-500 min-w-[80px]">From:</span>
                                   <a
-                                    href={`https://sepolia.etherscan.io/address/${transaction.metadata.previous_owner}`}
+                                    href={`https://stellar.expert/explorer/testnet/account/${transaction.metadata.previous_owner}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-xs text-blue-600 hover:text-blue-800 underline font-mono"
@@ -2535,7 +2585,7 @@ const Dashboard = () => {
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-gray-500 min-w-[80px]">To:</span>
                                   <a
-                                    href={`https://sepolia.etherscan.io/address/${transaction.metadata.new_owner}`}
+                                    href={`https://stellar.expert/explorer/testnet/account/${transaction.metadata.new_owner}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-xs text-blue-600 hover:text-blue-800 underline font-mono"
@@ -2548,7 +2598,7 @@ const Dashboard = () => {
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-gray-500 min-w-[80px]">Buyer:</span>
                                   <a
-                                    href={`https://sepolia.etherscan.io/address/${transaction.metadata.buyer}`}
+                                    href={`https://stellar.expert/explorer/testnet/account/${transaction.metadata.buyer}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-xs text-blue-600 hover:text-blue-800 underline font-mono"
@@ -2561,7 +2611,7 @@ const Dashboard = () => {
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-gray-500 min-w-[80px]">Seller:</span>
                                   <a
-                                    href={`https://sepolia.etherscan.io/address/${transaction.metadata.seller}`}
+                                    href={`https://stellar.expert/explorer/testnet/account/${transaction.metadata.seller}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-xs text-blue-600 hover:text-blue-800 underline font-mono"
@@ -2572,12 +2622,12 @@ const Dashboard = () => {
                               )}
                               <div className="pt-2 border-t border-gray-200 mt-2">
                                 <a
-                                  href={`https://sepolia.etherscan.io/tx/${transaction.blockchain_tx_hash}`}
+                                  href={`https://stellar.expert/explorer/testnet/tx/${transaction.blockchain_tx_hash}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-xs text-blue-600 hover:text-blue-800 underline font-medium inline-flex items-center gap-1"
                                 >
-                                  View Full Details on Etherscan →
+                                  View Full Details on StellarExpert →
                                 </a>
                               </div>
                               {transaction.status === 'completed' && transaction.currency === 'XLM' && (

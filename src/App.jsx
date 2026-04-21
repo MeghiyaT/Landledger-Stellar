@@ -27,7 +27,7 @@ const SupabaseClerkTokenBridge = ({ children }) => {
 
   useEffect(() => {
     // Pass the getToken function itself, not the result of calling it
-    setClerkTokenGetter(() => getToken)
+    setClerkTokenGetter(getToken)
     return () => setClerkTokenGetter(null)
   }, [getToken])
 

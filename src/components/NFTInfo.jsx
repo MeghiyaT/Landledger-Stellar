@@ -9,11 +9,9 @@ const NFTInfo = ({ property }) => {
     return null
   }
 
-  const getEtherscanUrl = (address, type = 'address') => {
-    const baseUrl = 'https://sepolia.etherscan.io'
-    if (type === 'token') {
-      return `${baseUrl}/token/${address}?a=${property.nft_token_id}`
-    }
+  const getStellarExpertUrl = (address, type = 'account') => {
+    const baseUrl = 'https://stellar.expert/explorer/testnet'
+    if (type === 'address' || type === 'token') type = 'account'
     return `${baseUrl}/${type}/${address}`
   }
 
@@ -47,12 +45,12 @@ const NFTInfo = ({ property }) => {
               <p className="text-sm font-mono font-semibold">{property.nft_token_id}</p>
               {property.nft_contract_address && (
                 <a
-                  href={getEtherscanUrl(property.nft_contract_address, 'token')}
+                  href={getStellarExpertUrl(property.nft_contract_address, 'token')}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 hover:text-blue-800 underline"
                 >
-                  View on Etherscan →
+                  View on StellarExpert →
                 </a>
               )}
             </div>
@@ -66,7 +64,7 @@ const NFTInfo = ({ property }) => {
             <div className="flex items-center justify-between">
               <p className="text-sm font-mono break-all">{property.nft_contract_address}</p>
               <a
-                href={getEtherscanUrl(property.nft_contract_address)}
+                href={getStellarExpertUrl(property.nft_contract_address)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-blue-600 hover:text-blue-800 underline ml-2 flex-shrink-0"
@@ -110,7 +108,7 @@ const NFTInfo = ({ property }) => {
                 {property.nft_mint_tx_hash.substring(0, 20)}...
               </p>
               <a
-                href={getEtherscanUrl(property.nft_mint_tx_hash, 'tx')}
+                href={getStellarExpertUrl(property.nft_mint_tx_hash, 'tx')}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-blue-600 hover:text-blue-800 underline ml-2 flex-shrink-0"
@@ -130,7 +128,7 @@ const NFTInfo = ({ property }) => {
                 {property.nft_transfer_tx_hash.substring(0, 20)}...
               </p>
               <a
-                href={getEtherscanUrl(property.nft_transfer_tx_hash, 'tx')}
+                href={getStellarExpertUrl(property.nft_transfer_tx_hash, 'tx')}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-blue-600 hover:text-blue-800 underline ml-2 flex-shrink-0"
@@ -148,10 +146,10 @@ const NFTInfo = ({ property }) => {
               variant="secondary"
               size="sm"
               onClick={() => {
-                window.open(getEtherscanUrl(property.nft_contract_address, 'token'), '_blank')
+                window.open(getStellarExpertUrl(property.nft_contract_address, 'token'), '_blank')
               }}
             >
-              View NFT on Etherscan
+              View NFT on StellarExpert
             </Button>
           )}
           {property.nft_token_uri && property.nft_token_uri.startsWith('ipfs://') && (

@@ -260,7 +260,7 @@ export const notifyPropertyBlockchain = async (userId, propertyTitle, propertyId
     'property_blockchain',
     'Property Registered on Blockchain',
     `Your property "${propertyTitle}" has been successfully registered on the blockchain.`,
-    txHash ? `https://sepolia.etherscan.io/tx/${txHash}` : `/properties/${propertyId}`
+    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : `/properties/${propertyId}`
   )
 }
 
@@ -270,8 +270,8 @@ export const notifyAmountDeducted = async (userId, amount, reason, txHash = null
     userId,
     'amount_deducted',
     'Tokens Deducted',
-    `${parseFloat(amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} PROP tokens were deducted. ${reason}`,
-    txHash ? `https://sepolia.etherscan.io/tx/${txHash}` : '/dashboard'
+    `${parseFloat(amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM tokens were deducted. ${reason}`,
+    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : '/dashboard'
   )
 }
 
@@ -281,8 +281,8 @@ export const notifyAmountReceived = async (userId, amount, reason, txHash = null
     userId,
     'amount_received',
     'Tokens Received',
-    `You received ${parseFloat(amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} PROP tokens. ${reason}`,
-    txHash ? `https://sepolia.etherscan.io/tx/${txHash}` : '/dashboard'
+    `You received ${parseFloat(amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM tokens. ${reason}`,
+    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : '/dashboard'
   )
 }
 
