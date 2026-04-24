@@ -1,6 +1,5 @@
 import * as StellarSdk from '@stellar/stellar-sdk'
 import {
-  isConnected,
   isAllowed,
   getPublicKey,
   getNetwork,

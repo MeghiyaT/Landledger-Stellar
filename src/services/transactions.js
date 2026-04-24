@@ -1,6 +1,5 @@
 import { supabase } from '../lib/supabase'
 import { completeEscrowOnChain } from './contracts'
-import { notifyTransactionCompleted } from './notifications'
 import * as StellarSdk from '@stellar/stellar-sdk'
 
 const HORIZON_URL = 'https://horizon-testnet.stellar.org'

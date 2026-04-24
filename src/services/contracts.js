@@ -123,7 +123,7 @@ export const mintPropertyNFT = async (ownerAddress, propertyId, tokenUri) => {
   return { txHash: result.hash, tokenId: propertyId }
 }
 
-export const hasPropertyNFT = async (propertyId) => {
+export const hasPropertyNFT = async (_propertyId) => {
   return false; // Implement RPC read
 }
 

@@ -4,7 +4,6 @@ import { getUserProfile, updateUserProfile } from '../services/user'
 
 // Freighter API
 import {
-  isConnected,
   isAllowed,
   setAllowed,
   getPublicKey,
@@ -207,9 +206,6 @@ const useWallet = () => {
     switchNetwork,
     checkNetwork,
     loadBalance,
-    // Alias exports so files relying on old names don't immediately break before we update them
-    isFreighterInstalled: isFreighterInstalled(),
-    isTestnet: isTestnet,
   }
 }
 

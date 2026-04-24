@@ -1,5 +1,4 @@
 import { supabase } from '../lib/supabase'
-import { inrToTokens } from '../utils/tokenConversion'
 import { notifyOfferReceived, notifyOfferAccepted, notifyOfferRejected, notifyPropertySold, notifyPropertyPurchased } from './notifications'
 
 // Get offers for a property (for sellers)
