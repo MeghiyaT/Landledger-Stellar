@@ -2,7 +2,7 @@ import * as StellarSdk from '@stellar/stellar-sdk'
 import {
   isConnected,
   isAllowed,
-  getPublicKey,
+  getAddress,
   getNetwork,
   signTransaction,
 } from '@stellar/freighter-api'
@@ -34,7 +34,7 @@ export const isTestnetNetwork = async () => {
   }
 
   try {
-    const network = await getNetwork()
+    const { network } = await getNetwork()
     return network === 'TESTNET'
   } catch (error) {
     console.error('Error checking network:', error)
@@ -80,9 +80,9 @@ export const sendTransaction = async (toAddress, amountInXlm) => {
     throw new Error('Freighter access not allowed')
   }
 
-  const senderPublicKey = await getPublicKey()
+  const { address: senderAddress } = await getAddress()
   const server = new StellarSdk.Horizon.Server(HORIZON_URL)
-  const account = await server.loadAccount(senderPublicKey)
+  const account = await server.loadAccount(senderAddress)
 
   const transaction = new StellarSdk.TransactionBuilder(account, {
     fee: StellarSdk.BASE_FEE,

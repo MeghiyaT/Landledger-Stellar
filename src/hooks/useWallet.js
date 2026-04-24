@@ -7,7 +7,7 @@ import {
   isConnected,
   isAllowed,
   setAllowed,
-  getPublicKey,
+  getAddress,
   getNetwork
 } from '@stellar/freighter-api'
 import * as StellarSdk from '@stellar/stellar-sdk'
@@ -49,8 +49,8 @@ const useWallet = () => {
     }
 
     try {
-      if (await isAllowed()) {
-         const network = await getNetwork()
+      if ((await isAllowed()).isAllowed) {
+         const { network } = await getNetwork()
          // Freighter returns "TESTNET", "PUBLIC", or "FUTURENET"
          const isOnStellarTestnet = network === "TESTNET"
          setIsTestnet(isOnStellarTestnet)
@@ -74,7 +74,14 @@ const useWallet = () => {
       return
     }
 
-    const onTestnet = await getNetwork().catch(() => "TESTNET") === "TESTNET"
+    let onTestnet = false
+    try {
+      const { network } = await getNetwork()
+      onTestnet = network === "TESTNET"
+    } catch (e) {
+      onTestnet = true
+    }
+    
     if (!onTestnet) {
       setBalance(null)
       return
@@ -145,15 +152,15 @@ const useWallet = () => {
 
     try {
       await setAllowed()
-      const publicKey = await getPublicKey()
+      const { address } = await getAddress()
 
-      if (publicKey) {
-        setWalletAddress(publicKey)
+      if (address) {
+        setWalletAddress(address)
         await checkNetwork()
 
         if (user?.id) {
           try {
-            await updateUserProfile(user.id, { wallet_address: publicKey })
+            await updateUserProfile(user.id, { wallet_address: address })
             window.dispatchEvent(new CustomEvent('walletConnected'))
           } catch (profileError) {
             console.error('Error updating profile with wallet address:', profileError)
@@ -161,7 +168,7 @@ const useWallet = () => {
         }
 
         await loadBalance()
-        return publicKey
+        return address
       }
     } catch (err) {
       console.error('Error connecting wallet:', err)

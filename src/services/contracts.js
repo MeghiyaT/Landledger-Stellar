@@ -1,7 +1,7 @@
 import * as StellarSdk from '@stellar/stellar-sdk'
 import {
   signTransaction,
-  getPublicKey,
+  getAddress,
 } from '@stellar/freighter-api'
 
 const HORIZON_URL = 'https://horizon-testnet.stellar.org'
@@ -25,9 +25,9 @@ export const getContractAddresses = () => {
  * Helper to invoke a Soroban contract method
  */
 const invokeSoroban = async (contractId, method, args = []) => {
-  const publicKey = await getPublicKey()
+  const { address } = await getAddress()
   const server = new StellarSdk.Horizon.Server(HORIZON_URL)
-  const account = await server.loadAccount(publicKey)
+  const account = await server.loadAccount(address)
   const contract = new StellarSdk.Contract(contractId)
 
   // Soroban calls must go through simulateTransaction first
@@ -52,11 +52,11 @@ const invokeSoroban = async (contractId, method, args = []) => {
 
 export const registerPropertyOnChain = async (title, location, price) => {
   const { PropertyRegistry } = getContractAddresses()
-  const publicKey = await getPublicKey()
+  const { address } = await getAddress()
 
   // Soroban args: owner (Address), title (String), location (String), price (u128)
   const result = await invokeSoroban(PropertyRegistry, 'register_property', [
-    StellarSdk.nativeToScVal(publicKey, { type: 'address' }),
+    StellarSdk.nativeToScVal(address, { type: 'address' }),
     StellarSdk.nativeToScVal(title, { type: 'string' }),
     StellarSdk.nativeToScVal(location, { type: 'string' }),
     StellarSdk.nativeToScVal(BigInt(price), { type: 'u128' }),
@@ -87,11 +87,11 @@ export const listPropertyForSale = async (propertyId, price) => {
 
 export const createEscrowXLM = async (propertyId, seller, amount, deadline) => {
   const { Escrow, PropertyToken } = getContractAddresses()
-  const publicKey = await getPublicKey()
+  const { address } = await getAddress()
 
   // Soroban args: buyer (Address), property_id (u32), seller (Address), token (Address), amount (u128), deadline (u64)
   return await invokeSoroban(Escrow, 'create_escrow', [
-    StellarSdk.nativeToScVal(publicKey, { type: 'address' }),
+    StellarSdk.nativeToScVal(address, { type: 'address' }),
     StellarSdk.nativeToScVal(parseInt(propertyId), { type: 'u32' }),
     StellarSdk.nativeToScVal(seller, { type: 'address' }),
     StellarSdk.nativeToScVal(PropertyToken, { type: 'address' }),
@@ -102,11 +102,11 @@ export const createEscrowXLM = async (propertyId, seller, amount, deadline) => {
 
 export const completeEscrowOnChain = async (transactionId) => {
   const { Escrow } = getContractAddresses()
-  const publicKey = await getPublicKey()
+  const { address } = await getAddress()
 
   return await invokeSoroban(Escrow, 'complete_escrow', [
     StellarSdk.nativeToScVal(parseInt(transactionId), { type: 'u32' }),
-    StellarSdk.nativeToScVal(publicKey, { type: 'address' }),
+    StellarSdk.nativeToScVal(address, { type: 'address' }),
   ])
 }
 
