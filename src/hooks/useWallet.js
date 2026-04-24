@@ -4,6 +4,7 @@ import { getUserProfile, updateUserProfile } from '../services/user'
 
 // Freighter API
 import {
+  isConnected,
   isAllowed,
   setAllowed,
   getPublicKey,
@@ -20,14 +21,29 @@ const useWallet = () => {
   const [isLoadingBalance, setIsLoadingBalance] = useState(false)
   const { user } = useUser()
 
-  // Check if Freighter is installed
-  const isFreighterInstalled = () => {
-    return typeof window !== 'undefined' && window.freighter !== undefined;
-  }
+  const [isFreighterInstalled, setIsFreighterInstalled] = useState(false)
+
+  // Check if Freighter is installed asynchronously on mount
+  useEffect(() => {
+    const checkFreighter = async () => {
+      try {
+        const result = await isConnected()
+        setIsFreighterInstalled(result.isConnected)
+      } catch (err) {
+        console.error('Error checking Freighter installation:', err)
+        setIsFreighterInstalled(false)
+      }
+    }
+    checkFreighter()
+    
+    // Polling as a fallback because sometimes the extension injects after React mount
+    const interval = setInterval(checkFreighter, 1000)
+    return () => clearInterval(interval)
+  }, [])
 
   // Check network and update state
   const checkNetwork = useCallback(async () => {
-    if (!isFreighterInstalled() || !walletAddress) {
+    if (!isFreighterInstalled || !walletAddress) {
       setIsTestnet(false)
       return
     }
@@ -119,7 +135,7 @@ const useWallet = () => {
 
   // Connect wallet
   const connectWallet = async () => {
-    if (!isFreighterInstalled()) {
+    if (!isFreighterInstalled) {
       setError('Freighter is not installed. Please install Freighter to connect your wallet.')
       return null
     }
@@ -196,7 +212,7 @@ const useWallet = () => {
     walletAddress,
     isConnecting,
     error,
-    isFreighterInstalled: isFreighterInstalled(),
+    isFreighterInstalled,
     isTestnet,
     balance,
     isLoadingBalance,

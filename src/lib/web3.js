@@ -1,5 +1,6 @@
 import * as StellarSdk from '@stellar/stellar-sdk'
 import {
+  isConnected,
   isAllowed,
   getPublicKey,
   getNetwork,
@@ -14,8 +15,13 @@ export const STELLAR_NETWORK = 'TESTNET'
  * Check if Freighter is installed (Replaces Freighter check)
  * @returns {boolean}
  */
-export const isFreighterInstalled = () => {
-  return typeof window !== 'undefined' && window.freighter !== undefined
+export const isFreighterInstalled = async () => {
+  try {
+    const { isConnected: connected } = await isConnected()
+    return connected
+  } catch (error) {
+    return false
+  }
 }
 
 /**
@@ -23,7 +29,7 @@ export const isFreighterInstalled = () => {
  * @returns {Promise<boolean>}
  */
 export const isTestnetNetwork = async () => {
-  if (!isFreighterInstalled()) {
+  if (!(await isFreighterInstalled())) {
     return false
   }
 
@@ -40,7 +46,7 @@ export const isTestnetNetwork = async () => {
  * Placeholder for network switching (Freighter doesn't support programmatic switching yet)
  */
 export const switchToStellarTestnet = async () => {
-  if (!isFreighterInstalled()) {
+  if (!(await isFreighterInstalled())) {
     throw new Error('Freighter wallet is not installed')
   }
   throw new Error('Please manually switch to TESTNET in your Freighter settings.')
