@@ -1,7 +1,9 @@
 import PropTypes from 'prop-types'
+import { getConversionRate, formatCurrency } from '../utils/tokenConversion'
 
-const TokenConversionInfo = ({ variant = 'default', className = '' }) => {
-  const conversionText = `100 INR = 1 XLM`
+const TokenConversionInfo = ({ variant = 'default', className = '', currency = 'INR' }) => {
+  const rate = getConversionRate(currency)
+  const conversionText = `1 XLM ≈ ${formatCurrency(rate, currency)}`
 
   if (variant === 'compact') {
     return (
@@ -33,12 +35,12 @@ const TokenConversionInfo = ({ variant = 'default', className = '' }) => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-blue-900 mb-1">Token Conversion Rate</p>
+          <p className="text-sm font-semibold text-blue-900 mb-1">Stellar XLM Conversion Rate</p>
           <p className="text-sm text-blue-800">
             <span className="font-medium">{conversionText}</span>
           </p>
           <p className="text-xs text-blue-700 mt-1">
-            Payments are processed using XLM tokens via secure blockchain escrow
+            Real-time market rates for secure blockchain payments via Stellar Testnet.
           </p>
         </div>
       </div>
@@ -49,6 +51,7 @@ const TokenConversionInfo = ({ variant = 'default', className = '' }) => {
 TokenConversionInfo.propTypes = {
   variant: PropTypes.oneOf(['default', 'compact', 'badge']),
   className: PropTypes.string,
+  currency: PropTypes.string,
 }
 
 export default TokenConversionInfo

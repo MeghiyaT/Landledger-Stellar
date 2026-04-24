@@ -1199,7 +1199,7 @@ const PropertyDetails = () => {
               <div className="mt-2 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-600">
                 <span className="font-medium">Token Equivalent: </span>
                 <span className="text-primary font-semibold">
-                  {inrToTokens(parseFloat(offerAmount)).toLocaleString('en-IN', { maximumFractionDigits: 4 })} PROP
+                  {inrToTokens(parseFloat(offerAmount)).toLocaleString(undefined, { maximumFractionDigits: 4 })} XLM
                 </span>
               </div>
             )}
