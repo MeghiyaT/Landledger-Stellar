@@ -43,3 +43,7 @@ deployment-addresses.json
 
 # Sensitive deployment info
 private-key.txt
+
+# Soroban/Stellar
+soroban-contracts/target/
+.agent/

@@ -9,7 +9,7 @@ import { useToast } from '../hooks/useToast'
  * TokenTransfer component for sending native XLM tokens on Stellar Testnet
  */
 const TokenTransfer = ({ className = '' }) => {
-  const { walletAddress, isSepolia, balance, loadBalance } = useWallet()
+  const { walletAddress, isTestnet, balance, loadBalance } = useWallet()
   const { success, error } = useToast()
   const [recipientAddress, setRecipientAddress] = useState('')
   const [amount, setAmount] = useState('')
@@ -84,7 +84,7 @@ const TokenTransfer = ({ className = '' }) => {
     }
   }
 
-  if (!walletAddress || !isSepolia) {
+  if (!walletAddress || !isTestnet) {
     return null
   }
 

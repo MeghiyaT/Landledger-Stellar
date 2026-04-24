@@ -4,9 +4,9 @@ import Skeleton from './ui/Skeleton'
 import TokenConversionInfo from './TokenConversionInfo'
 
 const TokenBalance = ({ className = '' }) => {
-  const { walletAddress, isSepolia, balance, isLoadingBalance } = useWallet()
+  const { walletAddress, isTestnet, balance, isLoadingBalance } = useWallet()
 
-  if (!walletAddress || !isSepolia) {
+  if (!walletAddress || !isTestnet) {
     return null
   }
 

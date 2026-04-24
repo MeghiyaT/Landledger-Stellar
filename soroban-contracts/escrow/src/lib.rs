@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, token};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, token};
 
 // We create a minimal interface trait to call the PropertyRegistry contract
 #[soroban_sdk::contractclient(name = "RegistryClient")]

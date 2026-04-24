@@ -17,7 +17,7 @@ export default defineConfig({
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-supabase': ['@supabase/supabase-js'],
-          'vendor-ethers': ['ethers'],
+          'vendor-stellar': ['@stellar/stellar-sdk', '@stellar/freighter-api'],
           'vendor-clerk': ['@clerk/clerk-react'],
         },
       },

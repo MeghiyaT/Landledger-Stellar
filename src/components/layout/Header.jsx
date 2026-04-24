@@ -18,7 +18,7 @@ const Header = () => {
     walletAddress,
     isConnecting,
     error: walletError,
-    isMetaMaskInstalled,
+    isFreighterInstalled,
     connectWallet,
     disconnectWallet,
     formatAddress,
@@ -114,10 +114,10 @@ const Header = () => {
                   variant="outline"
                   size="sm"
                   onClick={connectWallet}
-                  disabled={isConnecting || !isMetaMaskInstalled}
+                  disabled={isConnecting || !isFreighterInstalled}
                   isLoading={isConnecting}
                 >
-                      {isMetaMaskInstalled ? 'Connect Wallet' : 'Install Freighter'}
+                      {isFreighterInstalled ? 'Connect Wallet' : 'Install Freighter'}
                 </Button>
               )
             )}
@@ -246,11 +246,11 @@ const Header = () => {
                         connectWallet()
                         setIsMenuOpen(false)
                       }}
-                      disabled={isConnecting || !isMetaMaskInstalled}
+                      disabled={isConnecting || !isFreighterInstalled}
                       isLoading={isConnecting}
                       className="w-full"
                     >
-                          {isMetaMaskInstalled ? 'Connect Wallet' : 'Install Freighter'}
+                          {isFreighterInstalled ? 'Connect Wallet' : 'Install Freighter'}
                     </Button>
                   )}
                   {walletError && (

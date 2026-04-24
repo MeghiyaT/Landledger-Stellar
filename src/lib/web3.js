@@ -12,10 +12,10 @@ export const HORIZON_URL = 'https://horizon-testnet.stellar.org'
 export const STELLAR_NETWORK = 'TESTNET'
 
 /**
- * Check if Freighter is installed (Replaces MetaMask check)
+ * Check if Freighter is installed (Replaces Freighter check)
  * @returns {boolean}
  */
-export const isMetaMaskInstalled = () => {
+export const isFreighterInstalled = () => {
   return typeof window !== 'undefined' && window.freighter !== undefined
 }
 
@@ -23,8 +23,8 @@ export const isMetaMaskInstalled = () => {
  * Check if the current network is Stellar Testnet
  * @returns {Promise<boolean>}
  */
-export const isSepoliaNetwork = async () => {
-  if (!isMetaMaskInstalled()) {
+export const isTestnetNetwork = async () => {
+  if (!isFreighterInstalled()) {
     return false
   }
 
@@ -40,8 +40,8 @@ export const isSepoliaNetwork = async () => {
 /**
  * Placeholder for network switching (Freighter doesn't support programmatic switching yet)
  */
-export const switchToSepolia = async () => {
-  if (!isMetaMaskInstalled()) {
+export const switchToStellarTestnet = async () => {
+  if (!isFreighterInstalled()) {
     throw new Error('Freighter wallet is not installed')
   }
   throw new Error('Please manually switch to TESTNET in your Freighter settings.')

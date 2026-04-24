@@ -10,29 +10,26 @@ import {
   getPublicKey,
   getNetwork
 } from '@stellar/freighter-api'
-// Stellar SDK for network parsing (optional, but good for validation)
 import * as StellarSdk from '@stellar/stellar-sdk'
 
 const useWallet = () => {
   const [walletAddress, setWalletAddress] = useState(null)
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState(null)
-  const [isSepolia, setIsSepolia] = useState(false) // Keeping this state name to avoid breaking UI components relying on it, though it means 'isStellarTestnet'
+  const [isTestnet, setIsTestnet] = useState(false) 
   const [balance, setBalance] = useState(null)
   const [isLoadingBalance, setIsLoadingBalance] = useState(false)
   const { user } = useUser()
 
   // Check if Freighter is installed
-  const isMetaMaskInstalled = () => {
-    // We kept the function name to avoid breaking the UI hooks calling it
-    // but underneath we check if Freighter is connected
+  const isFreighterInstalled = () => {
     return typeof window !== 'undefined' && window.freighter !== undefined;
   }
 
   // Check network and update state
   const checkNetwork = useCallback(async () => {
-    if (!isMetaMaskInstalled() || !walletAddress) {
-      setIsSepolia(false)
+    if (!isFreighterInstalled() || !walletAddress) {
+      setIsTestnet(false)
       return
     }
 
@@ -41,7 +38,7 @@ const useWallet = () => {
          const network = await getNetwork()
          // Freighter returns "TESTNET", "PUBLIC", or "FUTURENET"
          const isOnStellarTestnet = network === "TESTNET"
-         setIsSepolia(isOnStellarTestnet)
+         setIsTestnet(isOnStellarTestnet)
          
          if (!isOnStellarTestnet) {
            setError('Please switch to Stellar testnet to use this application.')
@@ -51,7 +48,7 @@ const useWallet = () => {
       }
     } catch (err) {
       console.error('Error checking network:', err)
-      setIsSepolia(false)
+      setIsTestnet(false)
     }
   }, [walletAddress])
 
@@ -123,7 +120,7 @@ const useWallet = () => {
 
   // Connect wallet
   const connectWallet = async () => {
-    if (!isMetaMaskInstalled()) {
+    if (!isFreighterInstalled()) {
       setError('Freighter is not installed. Please install Freighter to connect your wallet.')
       return null
     }
@@ -132,22 +129,16 @@ const useWallet = () => {
     setError(null)
 
     try {
-      // For Freighter, we use setAllowed to prompt user
       await setAllowed()
-      
       const publicKey = await getPublicKey()
 
       if (publicKey) {
         setWalletAddress(publicKey)
-        
         await checkNetwork()
 
-        // Save wallet address to Supabase profile
         if (user?.id) {
           try {
-            await updateUserProfile(user.id, {
-              wallet_address: publicKey,
-            })
+            await updateUserProfile(user.id, { wallet_address: publicKey })
             window.dispatchEvent(new CustomEvent('walletConnected'))
           } catch (profileError) {
             console.error('Error updating profile with wallet address:', profileError)
@@ -173,9 +164,7 @@ const useWallet = () => {
 
     if (user?.id) {
       try {
-        await updateUserProfile(user.id, {
-          wallet_address: null,
-        })
+        await updateUserProfile(user.id, { wallet_address: null })
         window.dispatchEvent(new CustomEvent('walletDisconnected'))
       } catch (profileError) {
         console.error('Error removing wallet address from profile:', profileError)
@@ -185,7 +174,6 @@ const useWallet = () => {
     }
   }, [user])
 
-  // Format address for display
   const formatAddress = (address) => {
     if (!address) return ''
     return `${address.slice(0, 5)}...${address.slice(-4)}`
@@ -196,12 +184,11 @@ const useWallet = () => {
       checkNetwork()
       loadBalance()
     } else {
-      setIsSepolia(false)
+      setIsTestnet(false)
       setBalance(null)
     }
   }, [walletAddress, checkNetwork, loadBalance])
 
-  // Switch network abstraction (Freighter doesn't allow programatic network switching right now)
   const switchNetwork = async () => {
     setError('Please manually switch your Freighter wallet to the TESTNET network.')
   }
@@ -210,8 +197,8 @@ const useWallet = () => {
     walletAddress,
     isConnecting,
     error,
-    isMetaMaskInstalled: isMetaMaskInstalled(),
-    isSepolia,
+    isFreighterInstalled: isFreighterInstalled(),
+    isTestnet,
     balance,
     isLoadingBalance,
     connectWallet,
@@ -220,7 +207,11 @@ const useWallet = () => {
     switchNetwork,
     checkNetwork,
     loadBalance,
+    // Alias exports so files relying on old names don't immediately break before we update them
+    isFreighterInstalled: isFreighterInstalled(),
+    isTestnet: isTestnet,
   }
 }
 
 export default useWallet
+

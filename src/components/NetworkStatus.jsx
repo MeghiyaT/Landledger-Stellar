@@ -2,13 +2,13 @@
 import useWallet from '../hooks/useWallet'
 
 const NetworkStatus = () => {
-  const { isSepolia, isMetaMaskInstalled, walletAddress, switchNetwork } = useWallet()
+  const { isTestnet, isFreighterInstalled, walletAddress, switchNetwork } = useWallet()
 
-  if (!isMetaMaskInstalled || !walletAddress) {
+  if (!isFreighterInstalled || !walletAddress) {
     return null
   }
 
-  if (isSepolia) {
+  if (isTestnet) {
     return (
       <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg h-8">
         <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>

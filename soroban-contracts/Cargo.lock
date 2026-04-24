@@ -914,7 +914,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "property-nft"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "property-offers"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "property-registry"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "property-token"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

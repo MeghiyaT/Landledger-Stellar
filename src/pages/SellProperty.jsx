@@ -27,7 +27,7 @@ const SellProperty = () => {
   const [searchParams] = useSearchParams()
   const { user, isLoaded } = useUser()
   const { toasts, success, error, removeToast } = useToast()
-  const { walletAddress, isSepolia, isMetaMaskInstalled, connectWallet, switchNetwork } = useWallet()
+  const { walletAddress, isTestnet, isFreighterInstalled, connectWallet, switchNetwork } = useWallet()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadingImages, setUploadingImages] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -564,12 +564,12 @@ const SellProperty = () => {
     let currentWalletAddress = walletAddress
     let canRegisterOnBlockchain = false
     
-    if (isMetaMaskInstalled && walletAddress && isSepolia) {
+    if (isFreighterInstalled && walletAddress && isTestnet) {
       canRegisterOnBlockchain = true
       currentWalletAddress = walletAddress
     } else {
       // Try to enable blockchain if possible, but don't fail if it doesn't work
-      if (isMetaMaskInstalled) {
+      if (isFreighterInstalled) {
         if (!currentWalletAddress) {
           try {
             const connectedAddress = await connectWallet()
@@ -582,7 +582,7 @@ const SellProperty = () => {
           }
         }
         
-        if (currentWalletAddress && !isSepolia) {
+        if (currentWalletAddress && !isTestnet) {
           try {
             await switchNetwork()
             await new Promise(resolve => setTimeout(resolve, 2000))
@@ -590,7 +590,7 @@ const SellProperty = () => {
           } catch (err) {
             console.log('Could not switch network, continuing without blockchain registration')
           }
-        } else if (currentWalletAddress && isSepolia) {
+        } else if (currentWalletAddress && isTestnet) {
           canRegisterOnBlockchain = true
         }
       }
@@ -1158,31 +1158,31 @@ const SellProperty = () => {
                       <p className="text-xs text-blue-800 mt-1">
                         All properties are automatically registered on the Stellar blockchain for permanent, verifiable ownership records.
                       </p>
-                      {!isMetaMaskInstalled && (
+                      {!isFreighterInstalled && (
                         <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
                           <p className="text-xs text-red-700">
-                            ⚠️ MetaMask is required. Please install MetaMask to continue.
+                            ⚠️ Freighter is required. Please install Freighter to continue.
                           </p>
                         </div>
                       )}
-                      {isMetaMaskInstalled && !walletAddress && (
+                      {isFreighterInstalled && !walletAddress && (
                         <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
                           <p className="text-xs text-yellow-700">
                             ⚠️ Please connect your wallet. Click "Connect Wallet" in the header.
                           </p>
                         </div>
                       )}
-                      {isMetaMaskInstalled && walletAddress && !isSepolia && (
+                      {isFreighterInstalled && walletAddress && !isTestnet && (
                         <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
                           <p className="text-xs text-yellow-700">
-                            ⚠️ Please switch to Sepolia testnet. The network status indicator will help you switch.
+                            ⚠️ Please switch to Stellar Testnet. The network status indicator will help you switch.
                           </p>
                         </div>
                       )}
-                      {isMetaMaskInstalled && walletAddress && isSepolia && (
+                      {isFreighterInstalled && walletAddress && isTestnet && (
                         <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
                           <p className="text-xs text-green-700">
-                            ✅ Wallet connected and on Sepolia testnet. Ready to register on blockchain.
+                            ✅ Wallet connected and on Stellar Testnet. Ready to register on blockchain.
                           </p>
                         </div>
                       )}

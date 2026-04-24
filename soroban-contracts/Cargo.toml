@@ -2,6 +2,9 @@
 members = [
     "property-registry",
     "escrow",
+    "property-offers",
+    "property-nft",
+    "property-token",
 ]
 resolver = "2"
 
