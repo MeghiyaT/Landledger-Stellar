@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🏢 Landledger</h1>
+  <h1>Landledger</h1>
   <p><b>Next-Generation Real Estate & Land Registration Platform</b></p>
   
   [![Stellar](https://img.shields.io/badge/Blockchain-Stellar-000000?style=flat-square&logo=stellar&logoColor=white)](https://stellar.org)
@@ -14,22 +14,22 @@ A full-stack Web3 application for real estate property listings and blockchain-b
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 | Category | Highlights |
 |:---|:---|
-| 🏘️ **Property Marketplace** | Browse, filter & compare listings; for-sale and for-rent |
-| 📜 **Land Registration** | Multi-step form with document upload to Supabase Storage + IPFS via Pinata |
-| 🔗 **Blockchain Ownership** | On-chain registry of every property via Soroban Rust contracts |
-| 🤝 **Escrow Payments** | Secure smart contract escrow — funds released only on both-party confirmation |
-| 🏆 **NFT Certificates** | Mint property ownership NFTs (SEP-50 compliant) upon successful transactions |
-| 📊 **User Dashboard** | Track listings, offers, transactions, purchases, and notifications |
-| 🔔 **Real-time Notifications** | In-app notification centre with 30-second polling |
-| 🗺️ **Google Maps** | Interactive map views with property geocoding |
+|  **Property Marketplace** | Browse, filter & compare listings; for-sale and for-rent |
+|  **Land Registration** | Multi-step form with document upload to Supabase Storage + IPFS via Pinata |
+|  **Blockchain Ownership** | On-chain registry of every property via Soroban Rust contracts |
+|  **Escrow Payments** | Secure smart contract escrow — funds released only on both-party confirmation |
+|  **NFT Certificates** | Mint property ownership NFTs (SEP-50 compliant) upon successful transactions |
+|  **User Dashboard** | Track listings, offers, transactions, purchases, and notifications |
+|  **Real-time Notifications** | In-app notification centre with 30-second polling |
+|  **Google Maps** | Interactive map views with property geocoding |
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```text
 Landledger/
@@ -52,7 +52,7 @@ Landledger/
 
 ---
 
-## 🧰 Technology Stack
+##  Technology Stack
 
 | Layer | Technology |
 |:---|:---|
@@ -67,7 +67,7 @@ Landledger/
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
@@ -136,7 +136,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
-## 🔐 Security
+##  Security
 
 - **No service-role keys on the frontend** — all client requests use the anon key + a Clerk JWT.
 - **Row Level Security (RLS)** on every Supabase table enforces strict per-user data access.
@@ -144,7 +144,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
-## 🛠️ Development Scripts
+##  Development Scripts
 
 | Command | Description |
 |:---|:---|
