@@ -30,8 +30,6 @@ jobs:
     - name: Run Linters
       run: npm run lint
 
-    - name: Compile Smart Contracts
-      run: npm run compile
 
     - name: Build Frontend
       run: npm run build
