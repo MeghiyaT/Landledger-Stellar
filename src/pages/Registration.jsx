@@ -32,6 +32,7 @@ const Registration = () => {
   const hasAutoPopulatedRef = useRef(false)
   const initialFormData = {
     // Step 1: Property Information
+    propertyTitle: '', // Custom property title
     propertyType: '',
     propertyAddress: '',
     propertyState: '',
@@ -202,6 +203,7 @@ const Registration = () => {
             
             // Populate form with existing data (don't auto-fill when editing)
             setFormData({
+              propertyTitle: data.property_title || '',
               propertyType: data.property_type || '',
               propertyAddress: data.property_address || '',
               propertyState: data.property_state || '',
@@ -343,6 +345,11 @@ const Registration = () => {
     switch (step) {
       case 1:
         // Validate Property Information
+        if (!formData.propertyTitle.trim()) {
+          newErrors.propertyTitle = 'Please enter a property title'
+        } else if (formData.propertyTitle.trim().length < 5) {
+          newErrors.propertyTitle = 'Property title should be at least 5 characters long'
+        }
         if (!formData.propertyType || formData.propertyType === '') {
           newErrors.propertyType = 'Please select a property type'
         }
@@ -561,6 +568,7 @@ const Registration = () => {
       
       // Create registration
       const registrationData = {
+        property_title: formData.propertyTitle.trim() || null,
         property_type: formData.propertyType,
         property_address: formData.propertyAddress,
         property_state: formData.propertyState,
@@ -760,6 +768,17 @@ const Registration = () => {
                       Provide details about the property you want to register
                     </p>
                   </div>
+                  <Input
+                    label="Property Title"
+                    required
+                    value={formData.propertyTitle}
+                    onChange={(e) =>
+                      handleInputChange('propertyTitle', e.target.value)
+                    }
+                    error={errors.propertyTitle}
+                    placeholder="e.g., 3BHK Apartment in Andheri West"
+                    helperText={!errors.propertyTitle ? "A short, descriptive name for your property (minimum 5 characters)" : undefined}
+                  />
                   <Select
                     label="Property Type"
                     required
