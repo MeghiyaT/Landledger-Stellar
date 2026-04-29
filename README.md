@@ -53,11 +53,18 @@ Landledger/
 ├── supabase/
 │   ├── functions/             # Secure Edge Functions (Pinata, Emails, NFT Minting)
 │   └── migrations/            # Versioned DB migrations (run via Supabase CLI)
-└── src/
-    ├── components/            # Reusable UI & layout elements
-    ├── pages/                 # Route-level React components (Dashboard, Marketplace)
-    ├── services/              # Supabase data access & Soroban RPC integration
-    └── lib/                   # Integrations (Clerk JWT bridge, Supabase client)
+├── src/
+│   ├── components/            # Reusable UI & layout elements
+│   ├── pages/                 # Route-level React components (Dashboard, Marketplace)
+│   ├── services/              # Supabase data access & Soroban RPC integration
+│   ├── hooks/                 # Custom React hooks (useWallet, etc.)
+│   └── lib/                   # Integrations (Clerk JWT bridge, Supabase client)
+├── scripts/                   # Bash deployment & maintenance scripts
+├── contracts/                 # Legacy Solidity contracts (Pre-migration)
+├── public/                    # Static assets
+├── vercel.json                # Vercel SPA routing configuration
+├── vite.config.js             # Vite build configuration
+└── package.json               # Dependencies & NPM scripts
 ```
 
 ---
