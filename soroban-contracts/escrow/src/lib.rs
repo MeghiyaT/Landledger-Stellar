@@ -51,7 +51,7 @@ impl EscrowContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::RegistryAddress, &registry);
-        env.storage().instance().set(&DataKey::Counter, &0u32);
+        env.storage().persistent().set(&DataKey::Counter, &0u32);
         env.storage().instance().set(&DataKey::PlatformFeeBps, &250u32); // 2.5% platform fee
     }
 
@@ -74,9 +74,9 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&buyer, &env.current_contract_address(), &(amount as i128));
 
-        let mut counter: u32 = env.storage().instance().get(&DataKey::Counter).unwrap();
+        let mut counter: u32 = env.storage().persistent().get(&DataKey::Counter).unwrap();
         counter += 1;
-        env.storage().instance().set(&DataKey::Counter, &counter);
+        env.storage().persistent().set(&DataKey::Counter, &counter);
 
         let txn = EscrowTransaction {
             transaction_id: counter,

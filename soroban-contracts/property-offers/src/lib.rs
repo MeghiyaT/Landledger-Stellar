@@ -1,4 +1,8 @@
 #![no_std]
+// WARNING:
+// This contract is intentionally not wired to the frontend purchase flow.
+// Do not use `accept_offer` for production ownership transfer until escrowed
+// payment settlement is enforced on-chain.
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Env, String, Vec,
 };
@@ -239,15 +243,6 @@ impl PropertyOffers {
         env.storage()
             .persistent()
             .set(&DataKey::Offer(offer_id), &offer);
-
-        // Transfer property ownership via the registry.
-        let registry: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::RegistryAddress)
-            .unwrap();
-        let registry_client = RegistryClient::new(&env, &registry);
-        registry_client.transfer_ownership(&offer.property_id, &offer.buyer);
 
         env.events().publish(
             (symbol_short!("Offer"), symbol_short!("Accepted")),

@@ -58,10 +58,23 @@ export const generateRegistrationCertificatePDF = async (registration) => {
     }
     doc.text(`Registration Status: ${registration.status.toUpperCase()}`, margin, yPos)
 
+    // QR Code for verification
+    const verificationUrl = `${window.location.origin}/verify/${registration.id}`
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(verificationUrl)}`
+    
+    // Add QR code image
+    doc.addImage(qrCodeUrl, 'PNG', pageWidth - margin - 40, pageHeight - 65, 40, 40)
+    
+    doc.setFontSize(8)
+    doc.setTextColor(100, 100, 100)
+    doc.text('Scan to verify authenticity', pageWidth - margin - 20, pageHeight - 22, { align: 'center' })
+    doc.setTextColor(0, 0, 0)
+
     // Footer
     doc.setFontSize(10)
     doc.text('This is an official certificate issued by LandLedger', pageWidth / 2, pageHeight - 20, { align: 'center' })
-    doc.text(`Issued on ${new Date().toLocaleDateString()}`, pageWidth / 2, pageHeight - 15, { align: 'center' })
+    doc.text(`Verification Link: ${verificationUrl}`, pageWidth / 2, pageHeight - 15, { align: 'center' })
+    doc.text(`Issued on ${new Date().toLocaleDateString()}`, pageWidth / 2, pageHeight - 10, { align: 'center' })
 
     // Generate blob
     const pdfBlob = doc.output('blob')

@@ -25,6 +25,13 @@ pub enum DataKey {
     Approval(u32),
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovalEntry {
+    pub approved: Address,
+    pub live_until_ledger: u32,
+}
+
 #[contract]
 pub struct PropertyRegistry;
 
@@ -61,7 +68,7 @@ impl PropertyRegistry {
             location,
             price,
             is_active: true,
-            is_verified: true, // Auto-verified for now (can map to admin later)
+            is_verified: true, // Known limitation: auto-verified until an admin verification flow is introduced and redeployed.
             is_for_sale: false,
             created_at: timestamp,
             updated_at: timestamp,
@@ -104,9 +111,15 @@ impl PropertyRegistry {
         let mut prop: Property = env.storage().persistent().get(&DataKey::Property(property_id)).unwrap();
         
         // Authorization: owner OR approved escrow contract
-        let is_approved = if let Some(approved) = env.storage().persistent().get::<_, Address>(&DataKey::Approval(property_id)) {
-            approved.require_auth();
-            true
+        let current_ledger = env.ledger().sequence();
+        let is_approved = if let Some(approval) = env.storage().persistent().get::<_, ApprovalEntry>(&DataKey::Approval(property_id)) {
+            if approval.live_until_ledger < current_ledger {
+                env.storage().persistent().remove(&DataKey::Approval(property_id));
+                false
+            } else {
+                approval.approved.require_auth();
+                true
+            }
         } else {
             false
         };
@@ -174,10 +187,29 @@ impl PropertyRegistry {
         property_id: u32,
         to: Address,
     ) {
+        let default_expiry = env.ledger().sequence().saturating_add(518_400u32);
+        Self::approve_with_expiry(env, property_id, to, default_expiry);
+    }
+
+    pub fn approve_with_expiry(
+        env: Env,
+        property_id: u32,
+        to: Address,
+        live_until_ledger: u32,
+    ) {
         let prop: Property = env.storage().persistent().get(&DataKey::Property(property_id)).unwrap();
         prop.owner.require_auth();
 
-        env.storage().persistent().set(&DataKey::Approval(property_id), &to);
+        if live_until_ledger < env.ledger().sequence() {
+            panic!("Approval expiry must be in the future");
+        }
+
+        let approval = ApprovalEntry {
+            approved: to,
+            live_until_ledger,
+        };
+
+        env.storage().persistent().set(&DataKey::Approval(property_id), &approval);
     }
 
     /// Get property details

@@ -1,19 +1,34 @@
 import { createEscrowXLM, completeEscrowOnChain } from './contracts'
 import { createTransaction, updateTransactionStatus } from './transactions'
 import { supabase } from '../lib/supabase'
+import { getWalletAddresses } from './user'
 
 /**
  * Create a Stellar Escrow for property purchase
  */
 export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amountInXlm, deadlineDays = 30, pendingTransactionId = null) => {
   try {
-    const { supabaseStorage } = await import('../lib/supabaseStorage')
-    
-    // Fetch profiles for public keys
-    const [{ data: seller }, { data: buyer }] = await Promise.all([
-      supabaseStorage.from('profiles').select('wallet_address').eq('id', sellerId).single(),
-      supabaseStorage.from('profiles').select('wallet_address').eq('id', buyerId).single()
-    ])
+    let pendingTx = null
+    if (pendingTransactionId) {
+      const { data } = await supabase
+        .from('transactions')
+        .select('metadata')
+        .eq('id', pendingTransactionId)
+        .single()
+      pendingTx = data
+    }
+
+    if (pendingTx?.metadata?.escrow_ready === false) {
+      throw new Error('The seller still needs to finish the required on-chain approvals before escrow can be created.')
+    }
+
+    const { data: wallets, error: walletError } = await getWalletAddresses([sellerId, buyerId])
+    if (walletError) {
+      throw walletError
+    }
+
+    const seller = { wallet_address: wallets?.[sellerId] }
+    const buyer = { wallet_address: wallets?.[buyerId] }
 
     if (!seller?.wallet_address || !buyer?.wallet_address) {
       throw new Error('Both buyer and seller must have Stellar wallets connected.')
@@ -25,7 +40,11 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
       .eq('id', propertyId)
       .single()
 
-    const propertyIdOnChain = property?.blockchain_property_id || '0'
+    if (!property?.blockchain_property_id) {
+      throw new Error('This property is missing its on-chain property ID.')
+    }
+
+    const propertyIdOnChain = property.blockchain_property_id
     const deadline = Math.floor(Date.now() / 1000) + (deadlineDays * 24 * 60 * 60)
 
     // Call Soroban Escrow
@@ -40,11 +59,6 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
     let offerId = null;
     let sellerTxId = null;
     if (pendingTransactionId) {
-      const { data: pendingTx } = await supabase
-        .from('transactions')
-        .select('metadata')
-        .eq('id', pendingTransactionId)
-        .single();
       offerId = pendingTx?.metadata?.offer_id;
 
       if (offerId) {
@@ -73,7 +87,8 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
         updateData.metadata = {
           ...currentTx?.metadata,
           escrow_type: 'native',
-          escrow_transaction_id: 'stellar-escrow',
+          escrow_transaction_id: result.escrowId,
+          escrow_ready: true,
           deadline,
           seller_wallet: seller.wallet_address,
           buyer_wallet: buyer.wallet_address,
@@ -89,6 +104,7 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
                 ...updateData,
                 metadata: {
                     ...currentSellerTx?.metadata,
+                    escrow_ready: true,
                     ...updateData.metadata
                 }
             }).eq('id', sellerTxId);
@@ -106,7 +122,8 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
           ...updateData,
           metadata: {
             escrow_type: 'native',
-            escrow_transaction_id: 'stellar-escrow',
+            escrow_transaction_id: result.escrowId,
+            escrow_ready: true,
             deadline,
             seller_wallet: seller.wallet_address,
             buyer_wallet: buyer.wallet_address,

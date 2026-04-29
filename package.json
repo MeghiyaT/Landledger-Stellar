@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "repair:stellar-records": "node scripts/repair-stellar-records.mjs",
+    "deploy:mint-nft-function": "supabase functions deploy mint-property-nft --project-ref jgfbvdivnfiemlychhld --use-api"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.58.1",
@@ -17,6 +19,7 @@
     "@stellar/stellar-sdk": "^12.0.0",
     "@supabase/supabase-js": "^2.87.1",
     "jspdf": "^4.2.1",
+    "pdfjs-dist": "^5.7.284",
     "pinata": "^2.5.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -1,7 +1,6 @@
 // Supabase Edge Function to send emails via Resend
 // Deploy this function to handle email sending server-side (avoids CORS issues)
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { Resend } from 'https://esm.sh/resend@2.0.0'
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
@@ -10,9 +9,10 @@ const EMAIL_FROM = Deno.env.get('EMAIL_FROM') || 'onboarding@resend.dev'
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -82,4 +82,3 @@ serve(async (req) => {
     )
   }
 })
-

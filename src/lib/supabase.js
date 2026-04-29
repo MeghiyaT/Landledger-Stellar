@@ -11,9 +11,13 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 let clerkTokenGetter = null
+let isTemplateMissing = false
+let didLogFallbackTokenWarning = false
 
 export const setClerkTokenGetter = (getter) => {
   clerkTokenGetter = getter
+  isTemplateMissing = false // reset on new getter
+  didLogFallbackTokenWarning = false
 }
 
 // Create Supabase client with Clerk JWT integration.
@@ -24,14 +28,25 @@ export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
     fetch: async (url, options = {}) => {
       let token = null
       if (clerkTokenGetter) {
-        try {
-          token = await clerkTokenGetter({ template: 'supabase' })
-        } catch (err) {
-          // Template 'supabase' not found in Clerk. 
-          // We don't fall back to standard token here because it often causes 
-          // PGRST301 (Invalid JWT) if Supabase is not configured to accept it.
-          // The request will proceed without an Authorization header (as a public user).
-          console.warn('⚠️ Clerk Supabase template not found. Authenticated requests will use public access.')
+        if (!isTemplateMissing) {
+          try {
+            token = await clerkTokenGetter({ template: 'supabase' })
+          } catch (err) {
+            isTemplateMissing = true
+            console.warn('⚠️ Clerk Supabase template not found. Falling back to the default Clerk session token.')
+          }
+        }
+
+        if (!token) {
+          try {
+            token = await clerkTokenGetter()
+            if (token && !didLogFallbackTokenWarning) {
+              didLogFallbackTokenWarning = true
+              console.warn('ℹ️ Using the default Clerk session token for Supabase requests until the dedicated template is configured.')
+            }
+          } catch (fallbackErr) {
+            console.warn('⚠️ Failed to obtain a Clerk session token for Supabase:', fallbackErr?.message || fallbackErr)
+          }
         }
       }
 

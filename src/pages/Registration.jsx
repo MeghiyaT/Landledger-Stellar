@@ -686,46 +686,52 @@ const Registration = () => {
     <Section>
       <Container>
         <div className="max-w-3xl mx-auto">
-          <div className="mb-8">
-            <h1 className="mb-4">
-              {isEditMode ? 'Edit Land Registration' : 'Land Registration'}
+          <div className="mb-10 text-center">
+            <h1 className="mb-3 text-4xl font-bold text-gray-900 tracking-tight">
+              {isEditMode ? 'Modify Registration' : 'Land Registration'}
             </h1>
-            <p className="text-body-large text-gray-700">
-              Complete the form below to register your property
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+              Secure your property ownership by registering it on the legal ledger and Stellar blockchain.
             </p>
           </div>
 
-          {/* Progress Indicator */}
-          <div className="mb-8">
-            <div className="flex items-center justify-between mb-4">
+          {/* Progress Stepper - Pro Version */}
+          <div className="mb-12">
+            <div className="relative flex items-center justify-between">
+              {/* Progress Line Background */}
+              <div className="absolute top-1/2 left-0 w-full h-1 bg-gray-100 -translate-y-1/2 z-0 rounded-full" />
+              {/* Active Progress Line */}
+              <div 
+                className="absolute top-1/2 left-0 h-1 bg-primary -translate-y-1/2 z-0 rounded-full transition-all duration-500 ease-in-out" 
+                style={{ width: `${((currentStep - 1) / (totalSteps - 1)) * 100}%` }}
+              />
+
               {[1, 2, 3].map((step) => (
-                <div key={step} className="flex items-center flex-1">
-                  <div className="flex items-center">
-                    <div
-                      className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold transition-colors duration-200 ${
-                        step <= currentStep
-                          ? 'bg-primary text-white'
-                          : 'bg-gray-100 text-gray-700'
-                      }`}
-                    >
-                      {step}
-                    </div>
-                    {step < totalSteps && (
-                      <div
-                        className={`h-1 flex-1 mx-2 transition-colors duration-200 ${
-                          step < currentStep ? 'bg-primary' : 'bg-gray-100'
-                        }`}
-                      />
+                <div key={step} className="relative z-10 flex flex-col items-center">
+                  <div
+                    className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg shadow-sm border-4 transition-all duration-300 ${
+                      step < currentStep
+                        ? 'bg-primary border-primary text-white scale-110'
+                        : step === currentStep
+                        ? 'bg-white border-primary text-primary scale-125 shadow-md shadow-primary/20'
+                        : 'bg-white border-gray-100 text-gray-400'
+                    }`}
+                  >
+                    {step < currentStep ? (
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      step
                     )}
                   </div>
+                  <span className={`absolute -bottom-7 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors duration-300 ${
+                    step <= currentStep ? 'text-primary' : 'text-gray-400'
+                  }`}>
+                    {step === 1 ? 'Asset Details' : step === 2 ? 'Ownership' : 'Verification'}
+                  </span>
                 </div>
               ))}
-            </div>
-            <div className="w-full bg-gray-100 rounded-full h-2">
-              <div
-                className="bg-primary h-2 rounded-full transition-all duration-300"
-                style={{ width: `${progressPercentage}%` }}
-              />
             </div>
           </div>
 
@@ -733,8 +739,13 @@ const Registration = () => {
             <Card padding="lg">
               {/* General Error Message */}
               {generalError && (
-                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded">
-                  <p className="text-sm text-red-700">{generalError}</p>
+                <div className="status-banner-error mb-8">
+                  <div className="flex items-center">
+                    <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p className="text-sm font-semibold">{generalError}</p>
+                  </div>
                 </div>
               )}
 

@@ -1,13 +1,24 @@
 import { supabase } from '../lib/supabase'
-import { completeEscrowOnChain } from './contracts'
+import { completeEscrowOnChain, cancelEscrowOnChain, transferPropertyNFT } from './contracts'
 import * as StellarSdk from '@stellar/stellar-sdk'
+import { notifyPropertySold, notifyPropertyPurchased } from './notifications'
+import { getWalletAddresses } from './user'
 
 const HORIZON_URL = 'https://horizon-testnet.stellar.org'
 
 export const getTransactions = async (userId, filters = {}) => {
   let query = supabase
     .from('transactions')
-    .select('*')
+    .select(`
+      *,
+      properties (
+        id,
+        nft_token_id,
+        nft_transfer_tx_hash,
+        sold_to,
+        user_id
+      )
+    `)
     .eq('user_id', userId)
 
   if (filters.status && filters.status !== 'all') {
@@ -26,44 +37,7 @@ export const getTransactions = async (userId, filters = {}) => {
 
   const { data, error } = await query
 
-  // Fetch Stellar transactions if wallet address is available
-  let blockchainTransactions = []
-  if (!error && userId) {
-    try {
-      const { supabaseStorage } = await import('../lib/supabaseStorage')
-      const { data: profile } = await supabaseStorage
-        .from('profiles')
-        .select('wallet_address')
-        .eq('id', userId)
-        .single()
-
-      if (profile?.wallet_address) {
-        const { data: stellarTxs } = await getBlockchainTransactions(profile.wallet_address)
-        blockchainTransactions = (stellarTxs || []).map(tx => ({
-          ...tx,
-          user_id: userId
-        }))
-      }
-    } catch (blockchainErr) {
-      console.error('Error fetching Stellar transactions:', blockchainErr)
-    }
-  }
-
-  let allTransactions = data || []
-  if (blockchainTransactions.length > 0) {
-    const existingTxHashes = new Set(
-      (data || [])
-        .filter(tx => tx.blockchain_tx_hash)
-        .map(tx => tx.blockchain_tx_hash.toLowerCase())
-    )
-
-    const uniqueBlockchainTxs = blockchainTransactions.filter(
-      tx => !existingTxHashes.has(tx.blockchain_tx_hash?.toLowerCase() || '')
-    )
-
-    allTransactions = [...(data || []), ...uniqueBlockchainTxs]
-    allTransactions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-  }
+  const allTransactions = data || []
 
   return { data: allTransactions, error }
 }
@@ -93,13 +67,98 @@ export const updateTransactionStatus = async (transactionId, status, userId) => 
     return { data: null, error: { message: 'You can only update your own transactions' } }
   }
 
-  // Trigger Soroban Escrow Completion if applicable
-  if (status === 'completed' && transaction.metadata?.escrow_transaction_id) {
+  // Trigger Soroban Escrow Completion or Cancellation if applicable
+  if (transaction.metadata?.escrow_transaction_id) {
     try {
-      await completeEscrowOnChain(transaction.metadata.escrow_transaction_id)
+      if (status === 'completed') {
+        await completeEscrowOnChain(transaction.metadata.escrow_transaction_id)
+      } else if (status === 'failed') {
+        await cancelEscrowOnChain(transaction.metadata.escrow_transaction_id)
+      }
     } catch (escrowError) {
-      console.error('Failed to complete Soroban escrow:', escrowError)
-      return { data: null, error: { message: 'Blockchain escrow completion failed.' } }
+      console.error(`Failed to handle Soroban escrow (${status}):`, escrowError)
+      
+      let friendlyMessage = `Blockchain escrow ${status === 'completed' ? 'completion' : 'cancellation'} failed. Please try again.`
+      
+      const msg = escrowError.message || ''
+
+      if (msg.includes('Auth') && msg.includes('InvalidAction')) {
+        // Cross-contract auth failure: seller never called approve() on the registry
+        friendlyMessage = status === 'completed'
+          ? "The seller has not yet authorized this transfer on-chain. Please ask the seller to re-accept the offer with their Freighter wallet connected so the approval can be signed."
+          : "Authorization failed. You may not have permission to cancel this escrow."
+      } else if (msg.includes('WasmVm') && msg.includes('InvalidAction') || msg.includes('UnreachableCodeReached')) {
+        // Smart contract panic — typically the deadline check for cancel
+        friendlyMessage = status === 'failed'
+          ? "Cannot cancel yet: the escrow time-lock deadline has not expired. You can only request a refund after the deadline shown on your transaction."
+          : "The smart contract rejected this action. Please check that all conditions are met."
+      } else if (msg.includes('Transaction expired') || msg.includes('deadline')) {
+        friendlyMessage = "The escrow has expired. Please contact support to resolve this transaction."
+      } else if (msg.includes('Transaction closed')) {
+        friendlyMessage = status === 'completed'
+          ? "This escrow was already completed on-chain. Finishing the ownership sync now may still be possible if the NFT transfer has not been recorded yet."
+          : "This escrow has already been completed or cancelled."
+      }
+
+      const isRetryableCompletion = status === 'completed' && msg.includes('Transaction closed')
+      if (!isRetryableCompletion) {
+        return { data: null, error: { message: friendlyMessage } }
+      }
+    }
+  }
+
+  let nftTransferHash = null
+  if (status === 'completed' && transaction.transaction_type === 'purchase' && transaction.property_id) {
+    const { data: property, error: propertyError } = await supabase
+      .from('properties')
+      .select('id, nft_token_id, nft_transfer_tx_hash, title')
+      .eq('id', transaction.property_id)
+      .single()
+
+    if (propertyError) {
+      return { data: null, error: { message: 'Unable to load property details for NFT transfer.' } }
+    }
+
+    if (property?.nft_token_id && !property?.nft_transfer_tx_hash) {
+      let sellerWallet = transaction.metadata?.seller_wallet
+      let buyerWallet = transaction.metadata?.buyer_wallet
+
+      if (!sellerWallet || !buyerWallet) {
+        const { data: walletData, error: walletError } = await getWalletAddresses([
+          transaction.metadata?.seller_id,
+          transaction.metadata?.buyer_id,
+        ])
+
+        if (walletError) {
+          return { data: null, error: { message: 'Unable to resolve wallet addresses for NFT transfer.' } }
+        }
+
+        sellerWallet = sellerWallet || walletData?.[transaction.metadata?.seller_id]
+        buyerWallet = buyerWallet || walletData?.[transaction.metadata?.buyer_id]
+      }
+
+      if (!sellerWallet || !buyerWallet) {
+        return { data: null, error: { message: 'Missing seller or buyer wallet address for NFT transfer.' } }
+      }
+
+      try {
+        const nftTransfer = await transferPropertyNFT(
+          property.nft_token_id,
+          sellerWallet,
+          buyerWallet
+        )
+        nftTransferHash = nftTransfer.hash
+      } catch (nftError) {
+        console.error('Failed to transfer property NFT:', nftError)
+        return {
+          data: null,
+          error: {
+            message: 'Funds may already be released, but the property NFT transfer failed. Please retry completion to finish the deed transfer.'
+          }
+        }
+      }
+    } else {
+      nftTransferHash = property?.nft_transfer_tx_hash || null
     }
   }
 
@@ -112,6 +171,68 @@ export const updateTransactionStatus = async (transactionId, status, userId) => 
     .eq('id', transactionId)
     .select()
     .single()
+
+  // When buyer releases funds (completed), mark the property as officially 'sold'
+  if (!error && status === 'completed' && transaction.property_id && transaction.transaction_type === 'purchase') {
+    const buyerId = transaction.user_id
+    const sellerId = transaction.metadata?.seller_id
+
+    const { data: syncResult, error: propertyUpdateError } = await supabase.rpc(
+      'complete_property_sale_sync',
+      {
+        tx_id: transactionId,
+        nft_hash: nftTransferHash,
+      }
+    )
+
+    if (propertyUpdateError) {
+      console.error('Failed to sync sold property ownership in Supabase:', propertyUpdateError)
+      return { data: null, error: { message: 'The blockchain transfer succeeded, but the property record could not be updated in Supabase.' } }
+    }
+
+    const updatedProperty = Array.isArray(syncResult) ? syncResult[0] : syncResult
+
+    if (updatedProperty) {
+      // Notify buyer about property purchased
+      await notifyPropertyPurchased(
+        buyerId,
+        updatedProperty.title || 'Property',
+        updatedProperty.id
+      ).catch(err => console.error('Error notifying buyer:', err))
+      
+      // Notify seller about property sold
+      if (sellerId) {
+        await notifyPropertySold(
+          sellerId,
+          updatedProperty.title || 'Property',
+          updatedProperty.id
+        ).catch(err => console.error('Error notifying seller:', err))
+      }
+    }
+  }
+
+  // When a transaction fails or is cancelled, reset the property and sync the other party
+  if (!error && status === 'failed' && transaction.property_id) {
+    const { error: resetError } = await supabase.rpc('fail_property_sale_sync', {
+      tx_id: transactionId,
+    })
+
+    if (resetError) {
+      console.error('Failed to reset property sale state:', resetError)
+      return { data: null, error: { message: 'The transaction was updated, but the property sale state could not be reset.' } }
+    }
+
+    // Update the original offer to reflect it is no longer accepted/active
+    if (transaction.metadata?.offer_id) {
+      await supabase
+        .from('property_offers')
+        .update({ 
+          status: 'withdrawn',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', transaction.metadata.offer_id);
+    }
+  }
 
   return { data, error }
 }

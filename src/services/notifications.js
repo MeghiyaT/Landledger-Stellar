@@ -29,7 +29,7 @@ export const createNotification = async (userId, type, title, message, link = nu
   try {
     console.log('🔔 Creating notification:', { userId, type, title })
     
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('notifications')
       .insert({
         user_id: userId,
@@ -39,8 +39,7 @@ export const createNotification = async (userId, type, title, message, link = nu
         link,
         read: false,
       })
-      .select()
-      .single()
+    const data = null // Don't SELECT back — the inserting user may not own the notification (e.g. buyer notifying owner)
 
     if (error) {
       console.error('❌ Notification creation failed:', {
@@ -164,21 +163,39 @@ export const markAllNotificationsAsRead = async (userId) => {
  */
 export const deleteNotification = async (notificationId, userId) => {
   try {
-    const { data, error } = await supabase
+    // Note: no .select().single() — DELETE returns nothing by default in PostgREST,
+    // adding .single() causes 406 Not Acceptable when no matching row is found.
+    const { error } = await supabase
       .from('notifications')
       .delete()
       .eq('id', notificationId)
       .eq('user_id', userId)
-      .select()
-      .single()
 
-    return { data, error }
+    return { data: null, error }
   } catch (err) {
     console.error('Error deleting notification:', err)
     return {
       data: null,
       error: { message: err.message || 'Failed to delete notification' }
     }
+  }
+}
+
+/**
+ * Delete all notifications older than N days for a user
+ */
+export const deleteOldNotifications = async (userId, days = 15) => {
+  try {
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - days)
+    const { error } = await supabase
+      .from('notifications')
+      .delete()
+      .eq('user_id', userId)
+      .lt('created_at', cutoff.toISOString())
+    return { error }
+  } catch (err) {
+    return { error: { message: err.message } }
   }
 }
 
@@ -271,7 +288,7 @@ export const notifyAmountDeducted = async (userId, amount, reason, txHash = null
     'amount_deducted',
     'Tokens Deducted',
     `${parseFloat(amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM tokens were deducted. ${reason}`,
-    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : '/dashboard'
+    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : '/dashboard?tab=transactions'
   )
 }
 
@@ -282,7 +299,7 @@ export const notifyAmountReceived = async (userId, amount, reason, txHash = null
     'amount_received',
     'Tokens Received',
     `You received ${parseFloat(amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM tokens. ${reason}`,
-    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : '/dashboard'
+    txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash}` : '/dashboard?tab=transactions'
   )
 }
 
@@ -293,7 +310,7 @@ export const notifyOfferReceived = async (userId, propertyTitle, offerAmount, _o
     'offer_received',
     'New Offer Received',
     `You received a new offer of ₹${parseFloat(offerAmount).toLocaleString('en-IN')} for "${propertyTitle}"`,
-    `/dashboard`
+    `/dashboard?tab=property offers`
   )
 }
 
@@ -304,7 +321,7 @@ export const notifyOfferAccepted = async (userId, propertyTitle, _offerId) => {
     'offer_accepted',
     'Offer Accepted',
     `Your offer for "${propertyTitle}" has been accepted!`,
-    `/dashboard`
+    `/dashboard?tab=my offers`
   )
 }
 
@@ -315,7 +332,7 @@ export const notifyOfferRejected = async (userId, propertyTitle, _offerId) => {
     'offer_rejected',
     'Offer Rejected',
     `Your offer for "${propertyTitle}" was rejected.`,
-    `/dashboard`
+    `/dashboard?tab=my offers`
   )
 }
 
@@ -327,7 +344,7 @@ export const notifyTransactionCompleted = async (userId, transactionType, amount
     'transaction_completed',
     'Transaction Completed',
     `Your ${typeText} transaction has been completed. Amount: ${amount}`,
-    `/dashboard`
+    `/dashboard?tab=transactions`
   )
 }
 

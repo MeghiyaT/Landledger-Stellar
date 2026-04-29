@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase'
-import { notifyOfferReceived, notifyOfferAccepted, notifyOfferRejected, notifyPropertySold, notifyPropertyPurchased } from './notifications'
+import { notifyOfferReceived, notifyOfferAccepted, notifyOfferRejected } from './notifications'
+import { getWalletAddresses } from './user'
 
 // Get offers for a property (for sellers)
 export const getOffersByPropertyId = async (propertyId) => {
@@ -232,15 +233,16 @@ export const acceptOfferAndCreateTransaction = async (offerId, userId) => {
       }
     }
 
-    // If this is a purchase offer (not rental), transfer property ownership
-    if (offer.offer_type === 'purchase') {
+    const isPurchaseOffer = !offer.offer_type || offer.offer_type === 'purchase'
+
+    // Transfer property ownership on accepted purchase offer
+    if (isPurchaseOffer) {
       console.log('Transferring property ownership to buyer:', offer.buyer_id)
       const { error: propertyUpdateError } = await supabase
         .from('properties')
         .update({
-          sold_at: new Date().toISOString(),
           sold_to: offer.buyer_id,
-          status: 'sold', // Mark as sold
+          status: 'under_contract', // Offer accepted — awaiting escrow payment from buyer
           updated_at: new Date().toISOString()
         })
         .eq('id', offer.property_id)
@@ -250,33 +252,7 @@ export const acceptOfferAndCreateTransaction = async (offerId, userId) => {
         // Don't fail the offer acceptance if property update fails, but log it
         // The transaction creation should still proceed
       } else {
-        console.log('Property ownership transferred successfully')
-        
-        // Notify seller about property sold
-        if (offer.seller_id) {
-          try {
-            await notifyPropertySold(
-              offer.seller_id,
-              offer.properties?.title || 'Property',
-              offer.property_id
-            )
-          } catch (notifError) {
-            console.error('Error creating property sold notification:', notifError)
-          }
-        }
-
-        // Notify buyer about property purchased
-        if (offer.buyer_id) {
-          try {
-            await notifyPropertyPurchased(
-              offer.buyer_id,
-              offer.properties?.title || 'Property',
-              offer.property_id
-            )
-          } catch (notifError) {
-            console.error('Error creating property purchased notification:', notifError)
-          }
-        }
+        console.log('Property status updated to under_contract successfully')
       }
       
       // Remove property from buyer's saved properties (if saved)
@@ -299,27 +275,44 @@ export const acceptOfferAndCreateTransaction = async (offerId, userId) => {
     // The buyer will explicitly create the escrow (depositing XLM) from their Dashboard later.
     let escrowData = null
 
+    const { data: walletAddresses, error: walletLookupError } = await getWalletAddresses([
+      offer.seller_id,
+      offer.buyer_id,
+    ])
+
+    if (walletLookupError) {
+      console.warn('Wallet lookup failed while accepting offer:', walletLookupError)
+    }
+
+    const baseMetadata = {
+      offer_id: offerId,
+      property_title: offer.properties?.title,
+      property_location: offer.properties?.location,
+      buyer_id: offer.buyer_id,
+      seller_id: offer.seller_id,
+      seller_wallet: walletAddresses?.[offer.seller_id] || null,
+      buyer_wallet: walletAddresses?.[offer.buyer_id] || null,
+      escrow_ready: false,
+      transaction_flow: 'offer_accepted',
+    }
+
     // Create transaction for buyer
     const buyerTransaction = {
       user_id: offer.buyer_id,
       property_id: offer.property_id,
-      transaction_type: offer.offer_type === 'purchase' ? 'purchase' : 'rental',
+      transaction_type: 'purchase',
       amount: offer.offer_amount,
       currency: escrowData ? 'PROP' : (offer.currency || 'INR'), // Use PROP if escrow created
       status: escrowData ? 'in_progress' : 'pending', // In progress if escrow created
-      description: `Property ${offer.offer_type === 'purchase' ? 'purchase' : 'rental'}: ${offer.properties?.title || 'Property'}`,
+      description: `Property purchase: ${offer.properties?.title || 'Property'}`,
       blockchain_tx_hash: escrowData?.escrow_tx_hash || null,
       metadata: {
-        offer_id: offerId,
-        property_title: offer.properties?.title,
-        property_location: offer.properties?.location,
         offer_message: offer.message,
-        buyer_id: offer.buyer_id,
-        seller_id: offer.seller_id,
-        transaction_flow: 'offer_accepted',
+        ...baseMetadata,
         ...(escrowData && {
           escrow_transaction_id: escrowData.escrow_transaction_id,
           escrow_type: escrowData.escrow_type,
+          escrow_ready: true,
           payment_method: 'token'
         })
       }
@@ -347,22 +340,18 @@ export const acceptOfferAndCreateTransaction = async (offerId, userId) => {
     const sellerTransaction = {
       user_id: offer.seller_id,
       property_id: offer.property_id,
-      transaction_type: offer.offer_type === 'purchase' ? 'sale' : 'rental',
+      transaction_type: 'sale',
       amount: offer.offer_amount,
       currency: escrowData ? 'PROP' : (offer.currency || 'INR'), // Use PROP if escrow created
       status: escrowData ? 'in_progress' : 'pending', // In progress if escrow created
-      description: `Property ${offer.offer_type === 'purchase' ? 'sale' : 'rental'}: ${offer.properties?.title || 'Property'}`,
+      description: `Property sale: ${offer.properties?.title || 'Property'}`,
       blockchain_tx_hash: escrowData?.escrow_tx_hash || null,
       metadata: {
-        offer_id: offerId,
-        property_title: offer.properties?.title,
-        property_location: offer.properties?.location,
-        buyer_id: offer.buyer_id,
-        seller_id: offer.seller_id,
-        transaction_flow: 'offer_accepted',
+        ...baseMetadata,
         ...(escrowData && {
           escrow_transaction_id: escrowData.escrow_transaction_id,
           escrow_type: escrowData.escrow_type,
+          escrow_ready: true,
           payment_method: 'token'
         })
       }

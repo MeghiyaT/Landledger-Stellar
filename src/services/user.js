@@ -1,15 +1,10 @@
 import { supabase } from '../lib/supabase'
 import { supabaseStorage } from '../lib/supabaseStorage'
 
-// Use service role key if available, otherwise use regular client (works if RLS is disabled)
-const getProfileClient = () => {
-  return supabaseStorage || supabase
-}
+const getProfileClient = () => supabase
 
-// Profile operations - uses service role key if available, falls back to regular client
 export const updateUserProfile = async (userId, profileData) => {
   const client = getProfileClient()
-  const usingServiceRole = !!supabaseStorage
 
   try {
     const { data, error } = await client
@@ -28,7 +23,7 @@ export const updateUserProfile = async (userId, profileData) => {
         code: error.code,
         details: error.details,
         hint: error.hint,
-        client: usingServiceRole ? 'service_role' : 'regular'
+        client: 'regular'
       })
     }
 
@@ -57,7 +52,7 @@ export const getUserProfile = async (userId) => {
         hint: error.hint,
         statusCode: error.statusCode,
         fullError: error,
-        clientUsed: supabaseStorage ? 'service_role' : 'regular'
+        clientUsed: 'regular'
       })
     }
 
@@ -119,10 +114,6 @@ export const removeSavedProperty = async (userId, propertyId) => {
  * @returns {Promise<{data: {path: string, url: string}|null, error: Error|null}>}
  */
 export const uploadProfileDocument = async (file, userId, documentType) => {
-  if (!supabaseStorage) {
-    return { data: null, error: { message: 'Storage client not initialized. Check service role key.' } }
-  }
-
   const fileExt = file.name.split('.').pop()
   const fileName = `${userId}/${documentType}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
   const filePath = `profile-documents/${fileName}`
@@ -164,5 +155,29 @@ export const uploadProfileDocument = async (file, userId, documentType) => {
   return { data: { path: filePath, url: urlData.publicUrl }, error: null }
 }
 
+export const getWalletAddresses = async (profileIds = []) => {
+  const uniqueIds = [...new Set(profileIds.filter(Boolean))]
+
+  if (uniqueIds.length === 0) {
+    return { data: {}, error: null }
+  }
+
+  const { data, error } = await supabase.rpc('get_wallet_addresses', {
+    profile_ids: uniqueIds,
+  })
+
+  if (error) {
+    return { data: null, error }
+  }
+
+  const wallets = (data || []).reduce((acc, row) => {
+    if (row?.id) {
+      acc[row.id] = row.wallet_address || null
+    }
+    return acc
+  }, {})
+
+  return { data: wallets, error: null }
+}
 
 

@@ -244,7 +244,7 @@ const AdminDashboard = () => {
       active: { variant: 'success', label: 'Active' },
       paused: { variant: 'warning', label: 'Paused' },
       sold: { variant: 'primary', label: 'Sold' },
-      rented: { variant: 'primary', label: 'Rented' },
+      under_contract: { variant: 'warning', label: 'Under Contract' },
     }
     const status = property.status || 'active'
     const statusInfo = statusMap[status] || statusMap.active
@@ -590,9 +590,7 @@ const AdminDashboard = () => {
                   </div>
                   
                   <div className="flex items-center gap-2 mb-2">
-                    <Badge variant={property.listing_type === 'for_rent' ? 'secondary' : 'primary'}>
-                      {property.listing_type === 'for_rent' ? 'For Rent' : 'For Sale'}
-                    </Badge>
+                    <Badge variant="primary">For Sale</Badge>
                     <Badge variant="primary">{property.type}</Badge>
                   </div>
                   
@@ -600,7 +598,6 @@ const AdminDashboard = () => {
                   <p className="text-gray-700 mb-2">{property.location}</p>
                   <p className="text-2xl font-semibold text-primary mb-4">
                     ₹{property.price?.toLocaleString()}
-                    {property.listing_type === 'for_rent' && <span className="text-sm text-gray-700">/month</span>}
                   </p>
                   
                   <div className="flex items-center gap-2 text-sm text-gray-600 mb-4 pb-4 border-b">

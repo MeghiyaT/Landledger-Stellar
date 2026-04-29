@@ -151,5 +151,27 @@ export const updateRegistration = async (registrationId, userId, updateData) => 
   return { data, error }
 }
 
+/**
+ * Update registration with blockchain anchoring data
+ * @param {string} registrationId
+ * @param {string} blockchainId
+ * @param {string} txHash
+ * @returns {Promise<{data: Object|null, error: Error|null}>}
+ */
+export const updateRegistrationBlockchainData = async (registrationId, blockchainId, txHash) => {
+  const { data, error } = await supabase
+    .from('registrations')
+    .update({
+      blockchain_id: blockchainId,
+      blockchain_tx_hash: txHash,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', registrationId)
+    .select()
+    .single()
+
+  return { data, error }
+}
+
 
 

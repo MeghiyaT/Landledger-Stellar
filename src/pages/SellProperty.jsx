@@ -14,7 +14,7 @@ import { getPurchasedProperties } from '../services/properties'
 import { useToast } from '../hooks/useToast'
 import Toast from '../components/ui/Toast'
 import { PROPERTY_PLACEHOLDER } from '../utils/placeholders'
-import { registerPropertyOnChain, mintPropertyNFT, getContractAddresses } from '../services/contracts'
+import { registerPropertyOnChain } from '../services/contracts'
 // No ethers needed for Stellar
 import useWallet from '../hooks/useWallet'
 import TokenConversionInfo from '../components/TokenConversionInfo'
@@ -45,7 +45,7 @@ const SellProperty = () => {
     location: '',
     address: '',
     price: '',
-    listingType: null, // 'for_sale', 'for_rent', or null (for purchased properties not being listed)
+    listingType: null, // 'for_sale' or null (for purchased properties not being listed)
     type: '',
     bedrooms: '',
     bathrooms: '',
@@ -88,6 +88,7 @@ const SellProperty = () => {
         
         setIsEditMode(true)
         setOriginalProperty(property) // Store original property to preserve ownership history
+        const isPurchased = property.sold_to === user.id || (property.sold_at && property.user_id === user.id)
         
         // Populate form with existing property data
         setFormData({
@@ -95,7 +96,7 @@ const SellProperty = () => {
           location: property.location || '',
           address: property.address || '',
           price: property.price?.toString() || '',
-          listingType: property.listing_type || (isPurchased ? null : 'for_sale'), // Don't force listing type for purchased properties
+          listingType: property.listing_type || null,
           type: property.type || '',
           bedrooms: property.bedrooms?.toString() || '',
           bathrooms: property.bathrooms?.toString() || '',
@@ -109,8 +110,10 @@ const SellProperty = () => {
         })
         
         // Set property source based on registration or if it's a purchased property
-        const isPurchased = property.sold_to === user.id || (property.sold_at && property.user_id === user.id)
         setIsPurchasedProperty(isPurchased)
+        if (!property.listing_type && !isPurchased) {
+          setFormData(prev => ({ ...prev, listingType: 'for_sale' }))
+        }
         
         if (property.registration_id) {
           setSelectedPropertySource('registration')
@@ -199,6 +202,9 @@ const SellProperty = () => {
         address: '',
         type: '',
         sqft: '',
+        title: '',
+        description: '',
+        location: '',
       }))
       return
     }
@@ -214,6 +220,8 @@ const SellProperty = () => {
         address: registration.property_address || prev.address,
         type: mapRegistrationTypeToPropertyType(registration.property_type) || prev.type,
         sqft: registration.property_size ? String(registration.property_size) : prev.sqft,
+        title: registration.property_description ? (registration.property_description.length > 50 ? registration.property_description.substring(0, 50) + '...' : registration.property_description) : prev.title,
+        description: registration.property_description || prev.description,
         // Extract location from address (try to get area/neighborhood)
         location: registration.property_address 
           ? (() => {
@@ -338,8 +346,7 @@ const SellProperty = () => {
     setUploadProgress(0)
 
     try {
-      // Use service role key client for storage to bypass RLS issues
-      // This is a workaround until proper Clerk JWT configuration is set up
+      // Use the authenticated Supabase client for storage uploads.
       const { supabaseStorage } = await import('../lib/supabaseStorage')
       
       // Debug: Check if we have authentication
@@ -366,7 +373,7 @@ const SellProperty = () => {
         
         console.log('Attempting to upload:', filePath)
         
-        // Upload to Supabase Storage using service role key (bypasses RLS)
+        // Upload to Supabase Storage using the authenticated client.
         const { error: uploadError } = await supabaseStorage.storage
           .from('property-images')
           .upload(filePath, file, {
@@ -491,7 +498,7 @@ const SellProperty = () => {
       errors.address = 'Please provide a complete address (minimum 10 characters)'
     }
 
-    // Price is required only if listing type is selected (for sale/rent)
+    // Price is required only if listing type is selected (for sale)
     // For purchased properties being edited without listing, price is optional
     if (formData.listingType) {
       if (!formData.price || parseFloat(formData.price) <= 0) {
@@ -526,7 +533,7 @@ const SellProperty = () => {
     // Images are optional - no validation needed
 
     setFormErrors(errors)
-    return Object.keys(errors).length === 0
+    return errors
   }
 
   const handleSubmit = async (e) => {
@@ -600,7 +607,8 @@ const SellProperty = () => {
       console.log('Blockchain registration not available - property will be saved to Supabase only')
     }
 
-    if (!validateForm()) {
+    const validationErrors = validateForm()
+    if (Object.keys(validationErrors).length > 0) {
         // Create a helpful error message listing all missing fields
         const fieldLabels = {
           registrationId: 'Registered Property',
@@ -614,8 +622,8 @@ const SellProperty = () => {
           sqft: 'Square Feet'
         }
         
-        const missingFields = Object.keys(formErrors)
-          .filter(key => formErrors[key])
+        const missingFields = Object.keys(validationErrors)
+          .filter(key => validationErrors[key])
           .map(key => fieldLabels[key] || key)
         
         if (missingFields.length > 0) {
@@ -627,7 +635,7 @@ const SellProperty = () => {
           
           // Scroll to the first error field
           setTimeout(() => {
-            const firstErrorKey = Object.keys(formErrors).find(key => formErrors[key])
+            const firstErrorKey = Object.keys(validationErrors).find(key => validationErrors[key])
             if (firstErrorKey) {
               let element = null
               
@@ -707,117 +715,18 @@ const SellProperty = () => {
         propertyData.price = parseFloat(formData.price) // Required for new listings
       }
 
-      // Only include registration_id if it's provided and the column exists
-      // If you get an error about this column, run the migration: migration-add-registration-id.sql
-      if (formData.registrationId) {
-        propertyData.registration_id = formData.registrationId
+      // Link property to its verified registration record
+      if (formData.registrationId && selectedPropertySource === 'registration') {
+        propertyData.registration_id = formData.registrationId;
+        
+        // Also attach the registration number if it exists on the source registration
+        const sourceReg = registrations.find(r => r.id === formData.registrationId);
+        if (sourceReg && sourceReg.registration_number) {
+          propertyData.registration_number = sourceReg.registration_number;
+        }
       }
 
       console.log('Submitting property data:', propertyData)
-
-      // Upload to IPFS (OPTIONAL - property works without it)
-      let ipfsMetadataCid = null
-      let ipfsMetadataUrl = null
-      let ipfsImageCids = []
-      let ipfsError = null
-
-      // Try to upload to IPFS, but don't fail if it doesn't work
-      if (formData.images.length > 0) {
-        try {
-          success('Uploading to IPFS...')
-          
-          // Convert image URLs to Files if needed (for IPFS upload)
-          // If images are already uploaded to Supabase, we'll need to fetch them
-          // For now, we'll upload the metadata with image URLs
-          const imageFiles = [] // Will be populated if we have File objects
-          
-          // Create metadata for IPFS
-          const metadata = {
-            title: formData.title,
-            location: formData.location,
-            address: formData.address,
-            type: formData.type,
-            bedrooms: parseInt(formData.bedrooms) || 0,
-            bathrooms: parseInt(formData.bathrooms) || 0,
-            sqft: parseInt(formData.sqft) || null,
-            yearBuilt: formData.yearBuilt ? parseInt(formData.yearBuilt) : null,
-            description: formData.description || null,
-            features: formData.features ? formData.features.split(',').map(f => f.trim()).filter(Boolean) : [],
-            images: formData.images, // Store image URLs in metadata
-            price: formData.price ? parseFloat(formData.price) : null,
-            listingType: formData.listingType,
-            ownershipHistory: formData.ownershipHistory,
-          }
-
-          const ipfsResult = await uploadPropertyToIPFS(
-            imageFiles.length > 0 ? imageFiles : [], // Empty array if no File objects
-            metadata,
-            isEditMode ? editId : null
-          )
-
-          ipfsMetadataCid = ipfsResult.metadataCid
-          ipfsMetadataUrl = ipfsResult.metadataUrl
-          ipfsImageCids = ipfsResult.images.map(img => img.cid)
-
-          propertyData.ipfs_metadata_cid = ipfsMetadataCid
-          propertyData.ipfs_metadata_url = ipfsMetadataUrl
-          propertyData.ipfs_image_cids = ipfsImageCids
-
-          success('Uploaded to IPFS!')
-        } catch (err) {
-          console.error('IPFS upload error:', err)
-          ipfsError = err
-          // Graceful fallback: Continue with Supabase save even if IPFS fails
-          console.log('IPFS upload failed, but property will still be saved to database')
-          // Don't show error - just log it, property will still work
-        }
-      } else {
-        // No images, but we can still try to upload metadata to IPFS (optional)
-        try {
-          success('Uploading metadata to IPFS...')
-          
-          const metadata = {
-            title: formData.title,
-            location: formData.location,
-            address: formData.address,
-            type: formData.type,
-            bedrooms: parseInt(formData.bedrooms) || 0,
-            bathrooms: parseInt(formData.bathrooms) || 0,
-            sqft: parseInt(formData.sqft) || null,
-            yearBuilt: formData.yearBuilt ? parseInt(formData.yearBuilt) : null,
-            description: formData.description || null,
-            features: formData.features ? formData.features.split(',').map(f => f.trim()).filter(Boolean) : [],
-            images: [], // No images
-            price: formData.price ? parseFloat(formData.price) : null,
-            listingType: formData.listingType,
-            ownershipHistory: formData.ownershipHistory,
-          }
-
-          const { uploadMetadataToIPFS } = await import('../services/ipfs')
-          const ipfsResult = await uploadMetadataToIPFS(metadata, {
-            name: `property-${isEditMode ? editId : Date.now()}/metadata.json`,
-            keyvalues: {
-              propertyId: isEditMode ? editId : 'new',
-              type: 'property-metadata'
-            }
-          })
-
-          ipfsMetadataCid = ipfsResult.cid
-          ipfsMetadataUrl = ipfsResult.gatewayUrl
-
-          propertyData.ipfs_metadata_cid = ipfsMetadataCid
-          propertyData.ipfs_metadata_url = ipfsMetadataUrl
-          propertyData.ipfs_image_cids = []
-
-          success('Uploaded to IPFS!')
-        } catch (err) {
-          console.error('IPFS upload error:', err)
-          ipfsError = err
-          // Graceful fallback: Continue with Supabase save even if IPFS fails
-          console.log('IPFS upload failed, but property will still be saved to database')
-          // Don't show error - just log it, property will still work
-        }
-      }
 
       // Register on blockchain ONLY for new properties OR if property doesn't have blockchain ID yet
       let blockchainPropertyId = null
@@ -847,7 +756,7 @@ const SellProperty = () => {
             blockchainTxHash = blockchainResult.txHash
             propertyData.blockchain_property_id = blockchainPropertyId
             propertyData.blockchain_tx_hash = blockchainTxHash
-            success('Property registered on blockchain! Saving to database...')
+            success('Property registered on blockchain! Uploading to IPFS...')
             
             // Create notification for property owner
             if (user?.id) {
@@ -866,22 +775,112 @@ const SellProperty = () => {
         } catch (err) {
           console.error('Blockchain registration error:', err)
           blockchainError = err
-          // Graceful fallback: Continue with Supabase save even if blockchain fails
+          // Graceful fallback: Continue with IPFS and Supabase save even if blockchain fails
           console.log('Blockchain registration failed, but property will still be saved to database')
-          // Don't show error to user - just log it, property will still work
         }
       } else {
         // When editing existing property that already has blockchain ID, preserve it
         if (originalProperty?.blockchain_property_id) {
           propertyData.blockchain_property_id = originalProperty.blockchain_property_id
           propertyData.blockchain_tx_hash = originalProperty.blockchain_tx_hash
+          blockchainPropertyId = originalProperty.blockchain_property_id
+          blockchainTxHash = originalProperty.blockchain_tx_hash
         }
         console.log('Skipping blockchain registration - property already on-chain or edit mode')
       }
 
+      const editId = searchParams.get('edit')
+
+      // Upload to IPFS (OPTIONAL - property works without it)
+      let ipfsMetadataCid = null
+      let ipfsMetadataUrl = null
+      let ipfsImageCids = []
+      let ipfsError = null
+
+      const baseMetadata = {
+        title: formData.title,
+        location: formData.location,
+        address: formData.address,
+        type: formData.type,
+        bedrooms: parseInt(formData.bedrooms) || 0,
+        bathrooms: parseInt(formData.bathrooms) || 0,
+        sqft: parseInt(formData.sqft) || null,
+        yearBuilt: formData.yearBuilt ? parseInt(formData.yearBuilt) : null,
+        description: formData.description || null,
+        features: formData.features ? formData.features.split(',').map(f => f.trim()).filter(Boolean) : [],
+        price: formData.price ? parseFloat(formData.price) : null,
+        listingType: formData.listingType,
+        ownershipHistory: formData.ownershipHistory,
+        blockchainPropertyId: blockchainPropertyId || null,
+        blockchainTxHash: blockchainTxHash || null,
+      }
+
+      // Try to upload to IPFS, but don't fail if it doesn't work
+      if (formData.images.length > 0) {
+        try {
+          success('Uploading to IPFS...')
+          const imageFiles = []
+          
+          const metadata = {
+            ...baseMetadata,
+            images: formData.images, // Store image URLs in metadata
+          }
+
+          const ipfsResult = await uploadPropertyToIPFS(
+            imageFiles.length > 0 ? imageFiles : [],
+            metadata,
+            isEditMode ? editId : null
+          )
+
+          ipfsMetadataCid = ipfsResult.metadataCid
+          ipfsMetadataUrl = ipfsResult.metadataUrl
+          ipfsImageCids = ipfsResult.images.map(img => img.cid)
+
+          propertyData.ipfs_metadata_cid = ipfsMetadataCid
+          propertyData.ipfs_metadata_url = ipfsMetadataUrl
+          propertyData.ipfs_image_cids = ipfsImageCids
+
+          success('Uploaded to IPFS!')
+        } catch (err) {
+          console.error('IPFS upload error:', err)
+          ipfsError = err
+          console.log('IPFS upload failed, but property will still be saved to database')
+        }
+      } else {
+        try {
+          success('Uploading metadata to IPFS...')
+          
+          const metadata = {
+            ...baseMetadata,
+            images: [], // No images
+          }
+
+          const { uploadMetadataToIPFS } = await import('../services/ipfs')
+          const ipfsResult = await uploadMetadataToIPFS(metadata, {
+            name: `property-${isEditMode ? editId : Date.now()}/metadata.json`,
+            keyvalues: {
+              propertyId: isEditMode ? editId : 'new',
+              type: 'property-metadata'
+            }
+          })
+
+          ipfsMetadataCid = ipfsResult.cid
+          ipfsMetadataUrl = ipfsResult.gatewayUrl
+
+          propertyData.ipfs_metadata_cid = ipfsMetadataCid
+          propertyData.ipfs_metadata_url = ipfsMetadataUrl
+          propertyData.ipfs_image_cids = []
+
+          success('Uploaded to IPFS!')
+        } catch (err) {
+          console.error('IPFS upload error:', err)
+          ipfsError = err
+          console.log('IPFS upload failed, but property will still be saved to database')
+        }
+      }
+
       // Save to Supabase (always happens, even if blockchain registration is enabled)
       let result
-      const editId = searchParams.get('edit')
       if (isEditMode && editId) {
         // Update existing property
         result = await updateProperty(editId, propertyData)
@@ -909,51 +908,48 @@ const SellProperty = () => {
         }
       }
 
-      // Mint NFT for the property after it's created in Supabase
-      if (!submitError && data && blockchainPropertyId && currentWalletAddress && !isEditMode) {
+      // Auto-mint NFT via Supabase Edge Function (server-side admin key signing)
+      if (!submitError && data && blockchainPropertyId && !isEditMode) {
         try {
-          // Get NFT contract address
-          const addresses = await getContractAddresses()
-          if (addresses.PropertyNFT) {
-            // Create token URI (can be IPFS hash or property URL)
-            const tokenURI = ipfsMetadataCid 
-              ? `ipfs://${ipfsMetadataCid}` 
-              : `${window.location.origin}/properties/${data.id}`
-            
-            success('Minting NFT for property...')
-            
-            // Mint NFT
-            const nftResult = await mintPropertyNFT(
-              currentWalletAddress,
-              blockchainPropertyId,
-              tokenURI
-            )
-            
-            if (nftResult.tokenId) {
-              // Update property with NFT information
-              const { supabase } = await import('../lib/supabase')
-              await supabase
-                .from('properties')
-                .update({
-                  nft_token_id: nftResult.tokenId,
-                  nft_contract_address: addresses.PropertyNFT,
-                  nft_token_uri: tokenURI,
-                  nft_mint_tx_hash: nftResult.txHash,
-                  updated_at: new Date().toISOString()
-                })
-                .eq('id', data.id)
-              
-              success('NFT minted successfully!')
-            } else {
-              console.warn('NFT minted but token ID not found in result')
-            }
+          const tokenUri = ipfsMetadataCid
+            ? `ipfs://${ipfsMetadataCid}`
+            : `${window.location.origin}/properties/${data.id}`
+
+          success('Minting property NFT on-chain...')
+
+          const { mintPropertyNFT } = await import('../services/contracts')
+          const mintResult = await mintPropertyNFT(
+            currentWalletAddress,
+            blockchainPropertyId,
+            tokenUri
+          )
+
+          if (mintResult?.tokenId) {
+            // Save NFT metadata back to Supabase
+            const { supabase } = await import('../lib/supabase')
+            await supabase
+              .from('properties')
+              .update({
+                nft_token_id: mintResult.tokenId,
+                nft_contract_address: mintResult.contractId,
+                nft_token_uri: tokenUri,
+                nft_mint_tx_hash: mintResult.txHash,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', data.id)
+
+            success(`NFT minted! Token #${mintResult.tokenId} 🎉`)
           } else {
-            console.warn('PropertyNFT contract address not found, skipping NFT minting')
+            console.warn('[NFT] Mint edge function returned error:', mintResult)
+            // Store URI for later reference even if minting failed
+            const { supabase } = await import('../lib/supabase')
+            await supabase
+              .from('properties')
+              .update({ nft_token_uri: tokenUri, updated_at: new Date().toISOString() })
+              .eq('id', data.id)
           }
-        } catch (nftError) {
-          console.error('Error minting NFT:', nftError)
-          // Don't fail the entire process if NFT minting fails
-          error('NFT minting failed, but property is saved. Error: ' + (nftError.message || 'Unknown error'))
+        } catch (nftErr) {
+          console.warn('[NFT] Could not auto-mint NFT:', nftErr)
         }
       }
 
@@ -1047,12 +1043,14 @@ const SellProperty = () => {
             />
           ))}
 
-          <div className="mb-8">
-            <h1 className="mb-4">{isEditMode ? 'Edit Property' : 'List Your Property'}</h1>
-            <p className="text-body-large text-gray-700">
+          <div className="mb-10 text-center">
+            <h1 className="mb-3 text-4xl font-bold text-gray-900 tracking-tight">
+              {isEditMode ? 'Refine Your Listing' : 'List Your Real Estate'}
+            </h1>
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
               {isEditMode 
-                ? 'Update your property listing details and images'
-                : 'Sell or rent out your property to thousands of potential buyers and tenants'
+                ? 'Update your property details, images, and blockchain records to keep your listing accurate.'
+                : 'Turn your real-world assets into digital property. Sell with full blockchain transparency.'
               }
             </p>
           </div>
@@ -1060,217 +1058,224 @@ const SellProperty = () => {
           <form onSubmit={handleSubmit}>
             <Card padding="lg">
               <div className="space-y-6">
-                {/* Property Source Selection - Required (Hidden in edit mode) */}
+                {/* Property Source Selection - Premium Cards (Hidden in edit mode) */}
                 {!isEditMode && (
-                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-6">
-                    <h3 className="text-sm font-semibold text-blue-900 mb-2">
-                      Property Source
-                    </h3>
-                    <p className="text-xs text-blue-800 mb-4">
-                      Select a property source to list. You can choose from registered properties or properties you've purchased.
-                    </p>
-                    
-                    {/* Property Source Dropdown */}
-                    <Select
-                      label="Property Source"
-                      required
-                      value={selectedPropertySource}
-                      onChange={(e) => handlePropertySourceChange(e.target.value)}
-                      options={[
-                        { value: 'registration', label: 'Registered Properties' },
-                        { value: 'purchased', label: 'Purchased Properties' }
-                      ]}
-                      className="mb-4"
-                      disabled={isLoadingRegistrations}
-                    />
+                  <div className="mb-8">
+                    <label className="block text-sm font-bold text-gray-900 mb-4 uppercase tracking-wider">
+                      Select Property Source
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                      <div 
+                        onClick={() => handlePropertySourceChange('registration')}
+                        className={`radio-card ${selectedPropertySource === 'registration' ? 'radio-card-active' : 'border-gray-200'}`}
+                      >
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center mr-4 ${selectedPropertySource === 'registration' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-500'}`}>
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="font-bold text-gray-900">Registered Land</p>
+                          <p className="text-xs text-gray-500">List from your verified registrations</p>
+                        </div>
+                      </div>
 
-                  {isLoadingRegistrations ? (
-                    <div className="text-sm text-blue-700">Loading your properties...</div>
-                  ) : selectedPropertySource === 'registration' && registrations.length === 0 ? (
-                    <div className="space-y-3">
-                      <div className="text-sm text-red-700">
-                        You don't have any approved registrations yet. Please register your property first.
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate('/register')}
-                        className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                      <div 
+                        onClick={() => handlePropertySourceChange('purchased')}
+                        className={`radio-card ${selectedPropertySource === 'purchased' ? 'radio-card-active' : 'border-gray-200'}`}
                       >
-                        Register Your Property
-                      </Button>
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center mr-4 ${selectedPropertySource === 'purchased' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-500'}`}>
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="font-bold text-gray-900">Purchased Assets</p>
+                          <p className="text-xs text-gray-500">Resell properties you've acquired</p>
+                        </div>
+                      </div>
                     </div>
+                    
+                    {isLoadingRegistrations ? (
+                      <div className="status-banner-info animate-pulse flex items-center">
+                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Synchronizing with blockchain records...
+                      </div>
+                    ) : selectedPropertySource === 'registration' && registrations.length === 0 ? (
+                      <div className="status-banner-error">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span className="text-sm font-medium">No approved registrations found.</span>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            onClick={() => navigate('/register')}
+                            className="bg-red-600 text-white hover:bg-red-700"
+                          >
+                            Register Property
+                          </Button>
+                        </div>
+                      </div>
                     ) : selectedPropertySource === 'purchased' && purchasedProperties.length === 0 ? (
-                    <div className="space-y-3">
-                      <div className="text-sm text-red-700">
-                        You don't have any purchased properties yet. Please purchase a property first.
+                      <div className="status-banner-error">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span className="text-sm font-medium">No purchased properties found in your wallet.</span>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            onClick={() => navigate('/properties')}
+                            className="bg-red-600 text-white hover:bg-red-700"
+                          >
+                            Explore Marketplace
+                          </Button>
+                        </div>
                       </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate('/properties')}
-                        className="border-blue-300 text-blue-700 hover:bg-blue-100"
-                      >
-                        Browse Properties
-                      </Button>
-                    </div>
                     ) : (
-                      <Select
-                        label={selectedPropertySource === 'registration' ? 'Select Registered Property' : 'Select Purchased Property'}
-                        required
-                        value={selectedRegistrationId}
-                        onChange={(e) => handleRegistrationChange(e.target.value)}
-                        error={formErrors.registrationId}
-                        disabled={isLoadingRegistrations}
-                        options={[
-                        { value: '', label: selectedPropertySource === 'registration' ? 'Select a registered property...' : 'Select a purchased property...' },
-                        ...(selectedPropertySource === 'registration' 
-                          ? registrations.map(reg => ({
-                              value: reg.id,
-                              label: `${reg.property_type || 'Property'} - ${(reg.property_address || 'Address').substring(0, 50)}${reg.property_address && reg.property_address.length > 50 ? '...' : ''}${reg.survey_number ? ` (Survey: ${reg.survey_number})` : ''}`
-                            }))
-                          : purchasedProperties.map(prop => ({
-                              value: prop.id,
-                              label: `${prop.title} - ${prop.location}`
-                            }))
-                        )
-                      ]}
-                      helperText={!formErrors.registrationId ? `Selecting a ${selectedPropertySource === 'registration' ? 'registration' : 'purchased property'} will auto-fill property details` : undefined}
-                    />
+                      <div className="space-y-4">
+                        <label className="block text-sm font-medium text-gray-900 ml-1">
+                          {selectedPropertySource === 'registration' ? 'Available Registered Properties' : 'Available Purchased Properties'}
+                        </label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {(selectedPropertySource === 'registration' ? registrations : purchasedProperties).map((item) => {
+                            const isRegistration = selectedPropertySource === 'registration';
+                            const id = isRegistration ? item.id : item.id;
+                            const isSelected = selectedRegistrationId === id;
+                            const title = isRegistration ? (item.property_description || 'Registered Property') : item.title;
+                            const subtitle = isRegistration ? item.property_address : item.location;
+                            const type = isRegistration ? (item.property_type || 'property') : 'Purchased';
+                            
+                            return (
+                              <div 
+                                key={id}
+                                onClick={() => handleRegistrationChange(isSelected ? '' : id)}
+                                className={`cursor-pointer border rounded-xl p-4 transition-all duration-200 relative overflow-hidden ${
+                                  isSelected 
+                                    ? 'border-primary bg-primary/5 shadow-sm shadow-primary/10 ring-1 ring-primary' 
+                                    : 'border-gray-200 hover:border-primary/40 hover:bg-gray-50/50'
+                                }`}
+                              >
+                                {isSelected && (
+                                  <div className="absolute top-0 right-0 w-16 h-16 bg-primary/10 rounded-bl-[100%] transition-all" />
+                                )}
+                                <div className="flex justify-between items-start mb-2 relative z-10">
+                                  <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${isSelected ? 'bg-primary/20 text-primary' : 'bg-gray-100 text-gray-500'}`}>
+                                    {type}
+                                  </span>
+                                  <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${isSelected ? 'border-primary bg-primary text-white' : 'border-gray-300 bg-white'}`}>
+                                    {isSelected && (
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                                    )}
+                                  </div>
+                                </div>
+                                <h4 className="font-semibold text-gray-900 text-sm mb-1 line-clamp-1 relative z-10" title={title}>{title}</h4>
+                                <p className="text-[11px] text-gray-500 line-clamp-2 relative z-10" title={subtitle}>{subtitle}</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {formErrors.registrationId && (
+                          <p className="mt-2 text-sm text-error ml-1">{formErrors.registrationId}</p>
+                        )}
+                        {!formErrors.registrationId && (
+                          <div className="mt-4 flex items-center gap-2 text-xs text-gray-500 bg-gray-50/80 p-3 rounded-lg border border-gray-100">
+                            <svg className="w-4 h-4 text-primary opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            <span>Details will be auto-synchronized from your {selectedPropertySource === 'registration' ? 'legal records' : 'blockchain ownership'}.</span>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
 
-                {/* Blockchain Registration Required Notice */}
-                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="flex items-start">
-                    <div className="flex-shrink-0">
-                      <svg className="h-5 w-5 text-blue-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                {/* Smart Contract & Storage Status (Collapsible/Premium) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className={`status-banner-${(isFreighterInstalled && walletAddress && isTestnet) ? 'success' : 'info'}`}>
+                    <div className="flex items-center gap-3 mb-1">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                       </svg>
+                      <h3 className="text-sm font-bold">Stellar Blockchain</h3>
                     </div>
-                    <div className="ml-3 flex-1">
-                      <h3 className="text-sm font-medium text-blue-900">
-                        Blockchain Registration Required
-                      </h3>
-                      <p className="text-xs text-blue-800 mt-1">
-                        All properties are automatically registered on the Stellar blockchain for permanent, verifiable ownership records.
-                      </p>
-                      {!isFreighterInstalled && (
-                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
-                          <p className="text-xs text-red-700">
-                            ⚠️ Freighter is required. Please install Freighter to continue.
-                          </p>
-                        </div>
-                      )}
-                      {isFreighterInstalled && !walletAddress && (
-                        <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
-                          <p className="text-xs text-yellow-700">
-                            ⚠️ Please connect your wallet. Click "Connect Wallet" in the header.
-                          </p>
-                        </div>
-                      )}
-                      {isFreighterInstalled && walletAddress && !isTestnet && (
-                        <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
-                          <p className="text-xs text-yellow-700">
-                            ⚠️ Please switch to Stellar Testnet. The network status indicator will help you switch.
-                          </p>
-                        </div>
-                      )}
-                      {isFreighterInstalled && walletAddress && isTestnet && (
-                        <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
-                          <p className="text-xs text-green-700">
-                            ✅ Wallet connected and on Stellar Testnet. Ready to register on blockchain.
-                          </p>
-                        </div>
-                      )}
+                    <p className="text-xs opacity-90 mb-3">Permanent, verifiable ownership record.</p>
+                    {isFreighterInstalled && walletAddress && isTestnet ? (
+                      <div className="flex items-center text-[10px] font-bold tracking-wider uppercase bg-white/40 px-2 py-1 rounded w-fit">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 mr-2 animate-pulse"></span>
+                        On-Chain Ready
+                      </div>
+                    ) : (
+                      <div className="flex items-center text-[10px] font-bold tracking-wider uppercase bg-white/40 px-2 py-1 rounded w-fit">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 mr-2 animate-pulse"></span>
+                        Action Required
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="status-banner-info">
+                    <div className="flex items-center gap-3 mb-1">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                      <h3 className="text-sm font-bold">IPFS Persistence</h3>
+                    </div>
+                    <p className="text-xs opacity-90 mb-3">Immutable decentralized document storage.</p>
+                    <div className="flex items-center text-[10px] font-bold tracking-wider uppercase bg-white/40 px-2 py-1 rounded w-fit text-blue-900">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 mr-2"></span>
+                      Server-Side Pinning
                     </div>
                   </div>
                 </div>
 
-                {/* IPFS Storage Required Notice */}
-                <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
-                  <div className="flex items-start">
-                    <div className="flex-shrink-0">
-                      <svg className="h-5 w-5 text-purple-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <div className="ml-3 flex-1">
-                      <h3 className="text-sm font-medium text-purple-900">
-                        IPFS Storage (Recommended)
-                      </h3>
-                      <p className="text-xs text-purple-800 mt-1">
-                        All properties are automatically stored on IPFS (InterPlanetary File System) for permanent, decentralized storage. This creates an immutable record accessible from any IPFS gateway. If IPFS upload fails, the property will still be saved to the database.
-                      </p>
-                      {!import.meta.env.VITE_PINATA_JWT && (
-                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
-                          <p className="text-xs text-red-700">
-                            ⚠️ Pinata JWT not configured. Add VITE_PINATA_JWT to your .env file to enable IPFS storage.
-                          </p>
-                        </div>
-                      )}
-                      {import.meta.env.VITE_PINATA_JWT && (
-                        <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
-                          <p className="text-xs text-green-700">
-                            ✅ IPFS storage configured. Properties will be automatically uploaded to IPFS.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Listing Type - Optional for purchased properties being edited */}
-                <div className={(!isEditMode && registrations.length === 0) ? 'opacity-50 pointer-events-none' : ''}>
-                  <label className="block text-sm font-medium text-gray-900 mb-2">
-                    {isEditMode && isPurchasedProperty ? 'I want to (Optional)' : 'I want to'}
+                {/* Listing Type - Premium Radio Cards */}
+                <div className={(!isEditMode && registrations.length === 0) ? 'opacity-50 pointer-events-none' : 'mb-8'}>
+                  <label className="block text-sm font-bold text-gray-900 mb-4 uppercase tracking-wider">
+                    Listing Intent
                   </label>
-                  <div className="flex gap-4">
-                    <label className="flex items-center">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div 
+                      onClick={() => handleInputChange('listingType', 'for_sale')}
+                      className={`radio-card p-3 ${formData.listingType === 'for_sale' ? 'radio-card-active' : 'border-gray-200'}`}
+                    >
                       <input
                         type="radio"
-                        name="listingType"
-                        value="for_sale"
                         checked={formData.listingType === 'for_sale'}
-                        onChange={(e) => handleInputChange('listingType', e.target.value)}
-                        className="mr-2"
-                        disabled={(!isEditMode && registrations.length === 0) || isLoadingRegistrations || isLoadingProperty}
+                        onChange={() => {}}
+                        className="sr-only"
                       />
-                      <span>Sell</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="listingType"
-                        value="for_rent"
-                        checked={formData.listingType === 'for_rent'}
-                        onChange={(e) => handleInputChange('listingType', e.target.value)}
-                        className="mr-2"
-                        disabled={(!isEditMode && registrations.length === 0) || isLoadingRegistrations || isLoadingProperty}
-                      />
-                      <span>Rent</span>
-                    </label>
+                      <span className="font-semibold">Sell Property</span>
+                    </div>
+
                     {isEditMode && isPurchasedProperty && (
-                      <label className="flex items-center">
+                      <div 
+                        onClick={() => handleInputChange('listingType', null)}
+                        className={`radio-card p-3 ${!formData.listingType ? 'radio-card-active' : 'border-gray-200'}`}
+                      >
                         <input
                           type="radio"
-                          name="listingType"
-                          value=""
                           checked={!formData.listingType}
-                          onChange={(_e) => handleInputChange('listingType', null)}
-                          className="mr-2"
-                          disabled={isLoadingRegistrations || isLoadingProperty}
+                          onChange={() => {}}
+                          className="sr-only"
                         />
-                        <span>Just Edit (Don't List)</span>
-                      </label>
+                        <span className="font-semibold">Internal Update Only</span>
+                      </div>
                     )}
                   </div>
                   {isEditMode && isPurchasedProperty && (
-                    <p className="text-xs text-gray-600 mt-2">
-                      You can edit your property without listing it for sale or rent. Select "Just Edit" to update details only.
+                    <p className="text-xs text-gray-500 mt-3 italic">
+                      You are refining details for a property you own. Listing is optional.
                     </p>
                   )}
                 </div>
@@ -1303,7 +1308,7 @@ const SellProperty = () => {
 
                     <Input
                       label={formData.listingType 
-                        ? `${formData.listingType === 'for_sale' ? 'Sale' : 'Rent'} Price (₹)`
+                        ? 'Sale Price (₹)'
                         : (isEditMode && isPurchasedProperty ? 'Price (₹) (Optional)' : 'Price (₹)')}
                       type="text"
                       inputMode="numeric"
@@ -1316,7 +1321,7 @@ const SellProperty = () => {
                         ? (formData.listingType 
                             ? "Enter the price in INR (e.g., 5000000)"
                             : (isEditMode && isPurchasedProperty 
-                                ? "Price is optional when not listing for sale/rent"
+                                ? "Price is optional when not listing for sale"
                                 : "Enter the price in INR (e.g., 5000000)"))
                         : undefined}
                       disabled={registrations.length === 0}
@@ -1631,4 +1636,3 @@ const SellProperty = () => {
 }
 
 export default SellProperty
-

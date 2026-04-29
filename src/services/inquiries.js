@@ -11,6 +11,7 @@ export const createInquiry = async (inquiryData) => {
       .insert(inquiryData)
       .select()
       .single()
+    // Note: .select().single() is safe here because the buyer owns this inquiry (user_id = their id)
 
     // If error is due to unknown columns (migration not run), retry without optional fields
     if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('does not exist'))) {
@@ -69,7 +70,8 @@ export const createInquiry = async (inquiryData) => {
     }
 
     // Create notification for property owner when inquiry is created
-    if (!error && data) {
+    // Fire as long as no error — we don't need data back for this
+    if (!error) {
       try {
         // Get property to find owner
         const { data: property } = await supabase
@@ -82,7 +84,7 @@ export const createInquiry = async (inquiryData) => {
           await notifyInquiryMessage(
             property.user_id,
             property.title || 'Property',
-            data.id
+            data?.id || inquiryData.property_id
           )
         }
       } catch (notifError) {
@@ -129,8 +131,25 @@ export const getInquiriesByUserId = async (userId) => {
 
   const { data, error } = await supabase
     .from('inquiries')
-    .select('*')
+    .select(`
+      *,
+      properties(title, images)
+    `)
     .in('property_id', propertyIds)
+    .order('created_at', { ascending: false })
+
+  return { data, error }
+}
+
+export const getSentInquiries = async (userId) => {
+  // Get inquiries made by the user
+  const { data, error } = await supabase
+    .from('inquiries')
+    .select(`
+      *,
+      properties(title, images)
+    `)
+    .eq('user_id', userId)
     .order('created_at', { ascending: false })
 
   return { data, error }
@@ -148,6 +167,15 @@ export const updateInquiryStatus = async (inquiryId, status) => {
     .single()
 
   return { data, error }
+}
+
+export const deleteInquiry = async (inquiryId) => {
+  const { error } = await supabase
+    .from('inquiries')
+    .delete()
+    .eq('id', inquiryId)
+
+  return { error }
 }
 
 export const getUnreadInquiryCount = async (userId) => {

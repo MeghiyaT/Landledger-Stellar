@@ -55,8 +55,66 @@
     }
   }
 
+
   .animate-slide-in-right {
     animation: slide-in-right 0.3s ease-out;
+  }
+
+  /* Premium UI Utilities */
+  .card-pro {
+    @apply bg-white border border-gray-100 shadow-sm rounded-xl overflow-hidden transition-all duration-200 hover:shadow-md;
+  }
+
+  .status-banner {
+    @apply p-4 border-l-4 rounded-r-xl bg-opacity-50 transition-all duration-300;
+  }
+
+  .status-banner-info {
+    @apply status-banner border-blue-500 bg-blue-50 text-blue-900;
+  }
+
+  .status-banner-success {
+    @apply status-banner border-green-500 bg-green-50 text-green-900;
+  }
+
+  .status-banner-warning {
+    @apply status-banner border-yellow-500 bg-yellow-50 text-yellow-900;
+  }
+
+  .status-banner-error {
+    @apply status-banner border-red-500 bg-red-50 text-red-900;
+  }
+
+  .status-banner-purple {
+    @apply status-banner border-purple-500 bg-purple-50 text-purple-900;
+  }
+
+  .input-pro {
+    @apply w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:border-primary focus:ring-4 focus:ring-primary/5 transition-all outline-none text-gray-900;
+  }
+
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-xl;
+  }
+
+  .btn-pro {
+    @apply px-6 py-3 font-semibold rounded-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-pro-primary {
+    @apply btn-pro bg-primary text-white hover:bg-opacity-90 hover:shadow-lg hover:shadow-primary/20;
+  }
+
+  .btn-pro-outline {
+    @apply btn-pro border-2 border-gray-200 text-gray-700 hover:border-primary hover:text-primary hover:bg-primary/5;
+  }
+
+  .radio-card {
+    @apply relative flex items-center p-4 border-2 rounded-xl cursor-pointer transition-all hover:bg-gray-50;
+  }
+
+  .radio-card-active {
+    @apply border-primary bg-primary/5 ring-4 ring-primary/5;
   }
 }
 

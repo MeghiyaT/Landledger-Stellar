@@ -133,7 +133,7 @@ export const notifyRegistrationStatusChange = async (registration, status, userI
       notificationType,
       title,
       message,
-      `/dashboard` // Changed from `/registration/${registration.id}` to dashboard where registrations are shown
+      `/dashboard?tab=registrations` // Link to registrations tab in dashboard
     );
     
     if (result?.error) {

@@ -7,6 +7,7 @@ import Button from '../ui/Button'
 import Container from './Container'
 import NetworkStatus from '../NetworkStatus'
 import TokenBalance from '../TokenBalance'
+import NotificationCenter from '../NotificationCenter'
 
 const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
@@ -78,7 +79,6 @@ const Header = () => {
             >
               About
             </Link>
-            
             {/* Separator */}
             {isSignedIn && <div className="h-6 w-px bg-gray-300"></div>}
             
@@ -125,6 +125,13 @@ const Header = () => {
             {/* Separator */}
             <div className="h-6 w-px bg-gray-300"></div>
             
+            {/* Notification Center */}
+            {isSignedIn && (
+              <div className="flex-shrink-0">
+                <NotificationCenter />
+              </div>
+            )}
+
             {/* User Section */}
             {isSignedIn ? (
               <button
@@ -260,6 +267,12 @@ const Header = () => {
               )}
               {isSignedIn ? (
                 <>
+                  <div className="py-2 border-b border-gray-100 px-2 mb-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">Notifications</span>
+                      <NotificationCenter />
+                    </div>
+                  </div>
                   <Link
                     to="/dashboard"
                     className="text-base text-gray-700 hover:text-primary transition-colors duration-200"

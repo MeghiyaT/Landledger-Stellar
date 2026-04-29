@@ -57,6 +57,9 @@ const PropertyDetails = () => {
   const [offerAmount, setOfferAmount] = useState('')
   const [offerMessage, setOfferMessage] = useState('')
   const [isSubmittingOffer, setIsSubmittingOffer] = useState(false)
+  const isCurrentOwner = !!(user?.id && property?.user_id === user.id)
+  const isSoldOrUnavailable = property?.status === 'sold' || property?.status === 'under_contract' || !!property?.sold_at
+  const canReceiveOffers = !!property?.listing_type && !isSoldOrUnavailable
 
   useEffect(() => {
     const loadProperty = async () => {
@@ -449,9 +452,15 @@ const PropertyDetails = () => {
             setInquiryReplies(replies)
           }
         }
-        // Keep modal open to show phone number
-        // Form will be cleared when modal is closed
-      }
+        }
+        // Close modal after success
+        setIsContactModalOpen(false)
+        // Reset form
+        setContactForm({
+          message: '',
+          appointmentDate: '',
+          appointmentTime: ''
+        })
     } catch (err) {
       console.error('Error submitting inquiry:', err)
       error('An error occurred. Please try again.')
@@ -598,8 +607,8 @@ const PropertyDetails = () => {
                 <div className="flex items-center gap-4 mb-6">
                   <Badge variant="primary">{property.type}</Badge>
                   {property.listing_type && (
-                    <Badge variant={property.listing_type === 'for_rent' ? 'secondary' : 'primary'}>
-                      {property.listing_type === 'for_rent' ? 'For Rent' : 'For Sale'}
+                    <Badge variant="primary">
+                      For Sale
                     </Badge>
                   )}
                   {property.year_built && (
@@ -610,9 +619,6 @@ const PropertyDetails = () => {
                   <p className="text-3xl font-bold text-primary">
                     ₹{property.price?.toLocaleString()}
                   </p>
-                  {property.listing_type === 'for_rent' && (
-                    <span className="text-lg text-gray-700">/month</span>
-                  )}
                 </div>
               </div>
 
@@ -791,7 +797,13 @@ const PropertyDetails = () => {
                     </p>
                   </div>
                 )}
-                {user?.id && property.user_id === user.id ? (
+                {isSoldOrUnavailable && !isCurrentOwner ? (
+                  <div className="p-3 bg-gray-50 border border-gray-200 rounded mb-4">
+                    <p className="text-sm text-gray-700 text-center">
+                      This property is no longer available for sale.
+                    </p>
+                  </div>
+                ) : isCurrentOwner ? (
                   <div className="p-3 bg-gray-50 border border-gray-200 rounded mb-4">
                     <p className="text-sm text-gray-700 text-center">
                       This is your property listing
@@ -813,13 +825,15 @@ const PropertyDetails = () => {
                         </Badge>
                       )}
                     </div>
-                    <Button
-                      variant="secondary"
-                      className="w-full"
-                      onClick={() => setShowOfferModal(true)}
-                    >
-                      {(property?.listing_type || 'for_sale') === 'for_sale' ? 'Make an Offer' : 'Rent This Property'}
-                    </Button>
+                    {canReceiveOffers && (
+                      <Button
+                        variant="secondary"
+                        className="w-full"
+                        onClick={() => setShowOfferModal(true)}
+                      >
+                        Make an Offer
+                      </Button>
+                    )}
                     
                     {showInquiryMessages && (
                       <Card padding="md" className="border-l-4 border-l-primary">
@@ -937,13 +951,13 @@ const PropertyDetails = () => {
                     >
                       Contact Owner
                     </Button>
-                    {property?.listing_type && (
+                    {canReceiveOffers && (
                       <Button
                         variant="secondary"
                         className="w-full"
                         onClick={() => setShowOfferModal(true)}
                       >
-                        {property.listing_type === 'for_sale' ? 'Make an Offer' : 'Rent This Property'}
+                        Make an Offer
                       </Button>
                     )}
                   </div>
@@ -1171,13 +1185,13 @@ const PropertyDetails = () => {
           setOfferAmount('')
           setOfferMessage('')
         }}
-        title={(property?.listing_type || 'for_sale') === 'for_sale' ? 'Make an Offer' : 'Rent This Property'}
+        title="Make an Offer"
         size="md"
       >
         <div className="space-y-4">
           <div className="p-3 bg-blue-50 border border-blue-200 rounded">
             <p className="text-sm text-blue-800 font-medium mb-1">
-              {(property?.listing_type || 'for_sale') === 'for_sale' ? 'Property Price' : 'Monthly Rent'}
+              Property Price
             </p>
             <p className="text-lg font-semibold text-blue-900">
               ₹{property?.price?.toLocaleString('en-IN') || '0'}
@@ -1186,7 +1200,7 @@ const PropertyDetails = () => {
 
           <div>
             <Input
-              label={(property?.listing_type || 'for_sale') === 'for_sale' ? 'Your Offer Amount (₹)' : 'Monthly Rent Offer (₹)'}
+              label="Your Offer Amount (₹)"
               type="number"
               required
               value={offerAmount}
@@ -1243,14 +1257,13 @@ const PropertyDetails = () => {
 
                 setIsSubmittingOffer(true)
                 try {
-                  const listingType = property?.listing_type || 'for_sale'
                   const { error: offerError } = await createOffer({
                     property_id: property.id,
                     buyer_id: user.id,
                     seller_id: property.user_id,
                     offer_amount: parseFloat(offerAmount),
                     currency: 'INR',
-                    offer_type: listingType === 'for_sale' ? 'purchase' : 'rental',
+                    offer_type: 'purchase',
                     message: offerMessage.trim() || null,
                     status: 'pending'
                   })
@@ -1291,7 +1304,7 @@ const PropertyDetails = () => {
               disabled={isSubmittingOffer || !offerAmount}
               isLoading={isSubmittingOffer}
             >
-              {(property?.listing_type || 'for_sale') === 'for_sale' ? 'Submit Offer' : 'Submit Rental Request'}
+              Submit Offer
             </Button>
           </div>
         </div>
@@ -1301,4 +1314,3 @@ const PropertyDetails = () => {
 }
 
 export default PropertyDetails
-

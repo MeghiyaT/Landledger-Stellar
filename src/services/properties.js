@@ -1,5 +1,4 @@
 import { supabase } from '../lib/supabase'
-import { supabaseStorage } from '../lib/supabaseStorage'
 
 // ---------------------------------------------------------------------------
 // Internal helpers (fullstack-developer skill: DRY, modular service layer)
@@ -26,8 +25,8 @@ const buildVisiblePropertiesQuery = (includeRemoved = false, includeSold = false
     query = query
       .is('removed_at', null)
       .or(includeSold
-        ? 'status.is.null,status.eq.active,status.eq.sold,status.eq.rented'
-        : 'status.is.null,status.eq.active'
+        ? 'status.is.null,status.eq.active,status.eq.for_sale,status.eq.sold'
+        : 'status.is.null,status.eq.active,status.eq.for_sale'
       )
   }
 
@@ -46,7 +45,7 @@ const buildVisiblePropertiesQuery = (includeRemoved = false, includeSold = false
  * @returns Supabase query builder
  */
 const applyPropertyFilters = (query, filters = {}) => {
-  if (filters.listingType) query = query.eq('listing_type', filters.listingType)
+
   if (filters.location)    query = query.ilike('location', `%${filters.location}%`)
   if (filters.type)        query = query.eq('type', filters.type)
   if (filters.bedrooms)    query = query.gte('bedrooms', parseInt(filters.bedrooms))
@@ -116,10 +115,10 @@ export const getProperties = async (filters = {}) => {
       query = query
         .is('removed_at', null)
         .is('sold_at', null)
-        .or('status.is.null,status.eq.active')
+        .or('status.is.null,status.eq.active,status.eq.for_sale')
     } else {
       // Basic query for compatibility if columns are missing
-      query = query.or('status.is.null,status.eq.active')
+      query = query.or('status.is.null,status.eq.active,status.eq.for_sale')
     }
 
     query = applyPropertyFilters(query, filters)
@@ -158,8 +157,8 @@ export const getPropertyById = async (id, includeRemoved = false, includeSold = 
       if (withRemovedAt) query = query.is('removed_at', null)
       query = query.or(
         includeSold
-          ? 'status.is.null,status.eq.active,status.eq.sold,status.eq.rented'
-          : 'status.is.null,status.eq.active'
+          ? 'status.is.null,status.eq.active,status.eq.for_sale,status.eq.under_contract,status.eq.sold'
+          : 'status.is.null,status.eq.active,status.eq.for_sale,status.eq.under_contract'
       )
     }
 
@@ -186,7 +185,7 @@ export const getFeaturedProperties = async (limit = 3) => {
       .select('*')
       .eq('featured', true)
       .is('sold_at', null)
-      .or('status.is.null,status.eq.active')
+      .or('status.is.null,status.eq.active,status.eq.for_sale')
       .limit(limit)
       .order('created_at', { ascending: false })
 
@@ -245,15 +244,15 @@ export const getPurchasedProperties = async (userId) => {
     purchasedFromOffers = offersData
       .map(item => item.properties)
       .filter(Boolean)
-      .filter(prop => prop.sold_to === userId || !prop.sold_to)
+      .filter(prop => prop.status === 'sold' && prop.sold_to === userId)
   }
 
-  // Properties where sold_to matches the user
+  // Properties where sold_to matches the user and status is sold
   const { data, error } = await supabase
     .from('properties')
     .select('*')
     .eq('sold_to', userId)
-    .not('sold_at', 'is', null)
+    .eq('status', 'sold')
     .order('sold_at', { ascending: false })
 
   console.log('getPurchasedProperties result:', {
@@ -280,7 +279,7 @@ export const getPurchasedProperties = async (userId) => {
       .select('*')
       .eq('user_id', userId)
       .eq('sold_to', userId)
-      .not('sold_at', 'is', null)
+      .eq('status', 'sold')
       .order('sold_at', { ascending: false })
 
     if (!userOwnedError && userOwnedData && userOwnedData.length > 0) {
@@ -313,7 +312,7 @@ export const getSoldProperties = async (userId) => {
     soldProperties = offersData
       .map(item => item.properties)
       .filter(Boolean)
-      .filter(prop => (prop.sold_to && prop.sold_to !== userId) || prop.sold_at)
+      .filter(prop => prop.status === 'sold' && ((prop.sold_to && prop.sold_to !== userId) || prop.sold_at))
   }
 
   const uniqueSold = soldProperties.filter((prop, index, self) =>
@@ -405,13 +404,13 @@ export const deleteProperty = async (propertyId) => {
 // Get all properties (for admin)
 export const getAllProperties = async (filters = {}) => {
   const runQuery = async (withRemovedAt) => {
-    let query = supabaseStorage.from('properties').select('*')
+    let query = supabase.from('properties').select('*')
 
     if (filters.status) query = query.eq('status', filters.status)
     if (withRemovedAt && filters.includeRemoved !== true) {
       query = query.is('removed_at', null)
     }
-    if (filters.listingType) query = query.eq('listing_type', filters.listingType)
+
 
     return query.order('created_at', { ascending: false })
   }
@@ -434,7 +433,7 @@ export const adminRemoveProperty = async (propertyId, adminUserId, reason) => {
     return { data: null, error: { message: 'Removal reason is required' } }
   }
 
-  const { data: existingProperty, error: fetchError } = await supabaseStorage
+  const { data: existingProperty, error: fetchError } = await supabase
     .from('properties')
     .select('id, user_id, title')
     .eq('id', propertyId)
@@ -459,7 +458,7 @@ export const adminRemoveProperty = async (propertyId, adminUserId, reason) => {
 
   console.log('Updating property with:', updateData)
 
-  const { data, error } = await supabaseStorage
+  const { data, error } = await supabase
     .from('properties')
     .update(updateData)
     .eq('id', propertyId)
@@ -479,7 +478,7 @@ export const adminRemoveProperty = async (propertyId, adminUserId, reason) => {
 
     if (isColumnOrRlsError) {
       console.log('Retrying with status-only update (RLS or column issue)')
-      const { data: retryData, error: retryError } = await supabaseStorage
+      const { data: retryData, error: retryError } = await supabase
         .from('properties')
         .update({ status: 'paused', updated_at: new Date().toISOString() })
         .eq('id', propertyId)
@@ -500,7 +499,7 @@ export const adminRemoveProperty = async (propertyId, adminUserId, reason) => {
 
   if (!data) {
     // Verify the update by re-fetching
-    const { data: verifyData, error: verifyError } = await supabaseStorage
+    const { data: verifyData, error: verifyError } = await supabase
       .from('properties')
       .select('id, status, removed_at, removed_by, removal_reason')
       .eq('id', propertyId)

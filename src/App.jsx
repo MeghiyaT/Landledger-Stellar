@@ -14,6 +14,8 @@ import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import AdminDashboard from './pages/AdminDashboard'
 import SellProperty from './pages/SellProperty'
+import VerifyCertificate from './pages/VerifyCertificate'
+import VerifyCertificatePDF from './pages/VerifyCertificatePDF'
 import About from './pages/About'
 import NotFound from './pages/NotFound'
 import AdminRoute from './components/AdminRoute'
@@ -100,6 +102,8 @@ function App() {
                   }
                 />
                 <Route path="/about" element={<About />} />
+                <Route path="/verify/:registrationId" element={<VerifyCertificate />} />
+                <Route path="/verify-certificate" element={<VerifyCertificatePDF />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </main>

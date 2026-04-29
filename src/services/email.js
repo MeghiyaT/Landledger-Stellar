@@ -6,36 +6,16 @@
  * SETUP:
  * 1. Sign up at https://resend.com
  * 2. Get your API key from Resend dashboard
- * 3. Add to .env: VITE_RESEND_API_KEY=re_your_key_here
- * 4. Add to .env: VITE_EMAIL_FROM=onboarding@resend.dev (or your verified domain)
+ * 3. Set RESEND_API_KEY in the Supabase Edge Function secrets
+ * 4. Set EMAIL_FROM in the Supabase Edge Function secrets (optional)
  * 5. Add to .env: VITE_EMAIL_ENABLED=true
  */
 
-import { Resend } from 'resend'
-
 const EMAIL_ENABLED = import.meta.env.VITE_EMAIL_ENABLED === 'true'
-const RESEND_API_KEY = import.meta.env.VITE_RESEND_API_KEY || ''
 const EMAIL_FROM = import.meta.env.VITE_EMAIL_FROM || 'onboarding@resend.dev'
 
-
-
-
-// Initialize Resend client (only if API key is provided)
-let resend = null
-if (RESEND_API_KEY && EMAIL_ENABLED) {
-  try {
-    resend = new Resend(RESEND_API_KEY)
-    console.log('✅ Resend client initialized successfully')
-  } catch (error) {
-    console.error('❌ Failed to initialize Resend:', error)
-  }
-} else {
-  if (!EMAIL_ENABLED) {
-    console.warn('⚠️ Email is disabled (VITE_EMAIL_ENABLED is not "true")')
-  }
-  if (!RESEND_API_KEY) {
-    console.warn('⚠️ Resend API key not found (VITE_RESEND_API_KEY is missing)')
-  }
+if (!EMAIL_ENABLED) {
+  console.warn('⚠️ Email is disabled (VITE_EMAIL_ENABLED is not "true")')
 }
 
 /**
@@ -52,103 +32,51 @@ export const sendEmail = async (emailData) => {
     return { success: true, error: null, data: null }
   }
 
-  if (!RESEND_API_KEY) {
-    console.warn('⚠️ Resend API key not configured. Emails will not be sent.')
-    console.log('📧 Email would be sent:', {
-      to: emailData.to,
-      subject: emailData.subject,
-    })
-    return { success: false, error: new Error('Resend API key not configured'), data: null }
-  }
-
-  if (!resend) {
-    return { 
-      success: false, 
-      error: new Error('Resend client not initialized'), 
-      data: null 
-    }
-  }
-
   try {
-    // Use Supabase Edge Function if available (avoids CORS issues)
     const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
     const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
-    
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-      // Try to use Edge Function first (recommended)
-      try {
-        const response = await fetch(`${SUPABASE_URL}/functions/v1/send-email`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            to: emailData.to,
-            subject: emailData.subject,
-            html: emailData.html,
-            text: emailData.text || emailData.html?.replace(/<[^>]*>/g, ''),
-            from: emailData.from || EMAIL_FROM,
-          }),
-        })
-
-        if (response.ok) {
-          const result = await response.json()
-          if (result.success) {
-            console.log('✅ Email sent successfully via Edge Function:', {
-              to: emailData.to,
-              subject: emailData.subject,
-              id: result.data?.id,
-            })
-            return { success: true, error: null, data: result.data }
-          } else {
-            // Edge function returned error
-            const errorMsg = result.error?.message || result.error || 'Email sending failed'
-            console.error('❌ Edge Function error:', errorMsg)
-            throw new Error(errorMsg)
-          }
-        } else {
-          // Edge function returned non-200 status
-          const errorText = await response.text().catch(() => 'Unknown error')
-          console.error(`❌ Edge Function returned ${response.status}:`, errorText)
-          throw new Error(`Edge Function error: ${response.status} - ${errorText}`)
-        }
-      } catch (edgeError) {
-        // Edge function not available or failed, fall back to direct Resend
-        console.warn('⚠️ Edge Function error, falling back to direct Resend:', edgeError.message)
-        console.warn('💡 Check Edge Function logs in Supabase Dashboard for details')
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      return {
+        success: false,
+        error: new Error('Supabase function endpoint is not configured'),
+        data: null,
       }
     }
 
-    // Fallback: Direct Resend call (will have CORS issues in browser)
-    // This only works if Resend allows CORS or if running in Node.js
-    const result = await resend.emails.send({
-      from: emailData.from || EMAIL_FROM,
-      to: emailData.to,
-      subject: emailData.subject,
-      html: emailData.html,
-      text: emailData.text || emailData.html?.replace(/<[^>]*>/g, ''), // Fallback text from HTML
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/send-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({
+        to: emailData.to,
+        subject: emailData.subject,
+        html: emailData.html,
+        text: emailData.text || emailData.html?.replace(/<[^>]*>/g, ''),
+        from: emailData.from || EMAIL_FROM,
+      }),
     })
 
-    if (result.error) {
-      console.error('Resend API error:', result.error)
-      return { success: false, error: result.error, data: null }
+    const result = await response.json().catch(() => null)
+
+    if (!response.ok || !result?.success) {
+      const errorMessage =
+        result?.error?.message ||
+        result?.error ||
+        `Edge Function error: ${response.status}`
+      return { success: false, error: new Error(errorMessage), data: null }
     }
 
     console.log('✅ Email sent successfully:', {
       to: emailData.to,
       subject: emailData.subject,
-      id: result.data?.id,
+      id: result?.data?.id,
     })
 
     return { success: true, error: null, data: result.data }
   } catch (error) {
-    console.error('Error sending email via Resend:', error)
-    // Check if it's a CORS error
-    if (error.message?.includes('CORS') || error.message?.includes('fetch')) {
-      console.error('❌ CORS Error: Resend API cannot be called directly from browser.')
-      console.error('💡 Solution: Deploy the Supabase Edge Function (see RESEND_SETUP.md)')
-    }
+    console.error('Error sending email via Edge Function:', error)
     return { success: false, error, data: null }
   }
 }
@@ -401,12 +329,12 @@ export const sendPropertyInquiryEmail = async (data) => {
 }
 
 /**
- * Send property sold/rented email
- * @param {Object} data - { email, ownerName, propertyTitle, listingType }
+ * Send property sold email
+ * @param {Object} data - { email, ownerName, propertyTitle }
  */
-export const sendPropertySoldRentedEmail = async (data) => {
-  const action = data.listingType === 'for_rent' ? 'rented' : 'sold'
-  const subject = `Your Property Has Been ${action.charAt(0).toUpperCase() + action.slice(1)}!`
+export const sendPropertySoldEmail = async (data) => {
+  const action = 'sold'
+  const subject = `Your Property Has Been Sold!`
   const html = `
     <!DOCTYPE html>
     <html>
@@ -446,4 +374,3 @@ export const sendPropertySoldRentedEmail = async (data) => {
     text: `Dear ${data.ownerName},\n\nCongratulations! Your property ${data.propertyTitle} has been ${action}.\n\nYou can view the details in your dashboard.\n\nView dashboard: ${window.location.origin}/dashboard`,
   })
 }
-

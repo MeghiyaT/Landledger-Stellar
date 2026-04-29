@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
-import { getNotifications, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, getUnreadNotificationCount } from '../services/notifications'
+import { getNotifications, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, getUnreadNotificationCount, deleteOldNotifications } from '../services/notifications'
 import { useNavigate } from 'react-router-dom'
 import Button from './ui/Button'
 import Skeleton from './ui/Skeleton'
@@ -25,7 +25,8 @@ const NotificationCenter = ({ className = '' }) => {
     setHasError(false)
     try {
       const [notificationsResult, countResult] = await Promise.all([
-        getNotifications(user.id, { limit: 10 }),
+        // Bell only shows UNREAD notifications — read ones live in Dashboard
+        getNotifications(user.id, { limit: 10, unreadOnly: true }),
         getUnreadNotificationCount(user.id)
       ])
 
@@ -47,6 +48,9 @@ const NotificationCenter = ({ className = '' }) => {
   useEffect(() => {
     if (user?.id) {
       loadNotifications()
+
+      // Clean up notifications older than 15 days on open
+      deleteOldNotifications(user.id, 15).catch(() => {})
 
       // Poll for new notifications every 30 seconds
       const interval = setInterval(loadNotifications, 30000)
@@ -72,25 +76,31 @@ const NotificationCenter = ({ className = '' }) => {
   }, [isOpen])
 
   const handleNotificationClick = async (notification) => {
-    // Mark as read
+    // 1. Close dropdown immediately
+    setIsOpen(false)
+
+    // 2. Mark as read — optimistically remove from bell dropdown
     if (!notification.read) {
-      await markNotificationAsRead(notification.id, user.id)
-      setNotifications(prev =>
-        prev.map(n => n.id === notification.id ? { ...n, read: true } : n)
-      )
+      // Remove from bell dropdown immediately (bell only shows unread)
+      setNotifications(prev => prev.filter(n => n.id !== notification.id))
       setUnreadCount(prev => Math.max(0, prev - 1))
+
+      // Persist in background
+      markNotificationAsRead(notification.id, user.id).catch(err => {
+        console.error('Failed to mark notification as read:', err)
+      })
     }
 
-    // Navigate to link if available
+    // 3. Navigate immediately
     if (notification.link) {
       if (notification.link.startsWith('http')) {
         window.open(notification.link, '_blank', 'noopener,noreferrer')
       } else {
         navigate(notification.link)
       }
+    } else {
+      navigate('/dashboard?tab=notifications')
     }
-
-    setIsOpen(false)
   }
 
   const handleMarkAllRead = async () => {
@@ -338,7 +348,7 @@ const NotificationCenter = ({ className = '' }) => {
             <div className="p-3 border-t border-gray-200 text-center">
               <button
                 onClick={() => {
-                  navigate('/dashboard')
+                  navigate('/dashboard?tab=notifications')
                   setIsOpen(false)
                 }}
                 className="text-sm text-primary hover:underline"
