@@ -21,6 +21,7 @@ import TokenConversionInfo from '../components/TokenConversionInfo'
 import { inrToTokens } from '../utils/tokenConversion'
 import { notifyPropertyBlockchain } from '../services/notifications'
 import { uploadPropertyToIPFS } from '../services/ipfs'
+import { supabase } from '../lib/supabase'
 
 const SellProperty = () => {
   const navigate = useNavigate()
@@ -45,7 +46,7 @@ const SellProperty = () => {
     location: '',
     address: '',
     price: '',
-    listingType: null, // 'for_sale' or null (for purchased properties not being listed)
+    listingType: 'for_sale', // Default to for_sale since rent is removed
     type: '',
     bedrooms: '',
     bathrooms: '',
@@ -155,7 +156,20 @@ const SellProperty = () => {
         ])
         
         if (!registrationsResult.error && registrationsResult.data) {
-          setRegistrations(registrationsResult.data)
+          // Fetch existing properties to find out which registrations are already listed or sold
+          const { data: existingProperties } = await supabase
+            .from('properties')
+            .select('registration_id')
+            .not('registration_id', 'is', null)
+          
+          const usedRegistrationIds = existingProperties?.map(p => p.registration_id) || []
+          
+          // Filter out registrations that are already used
+          const availableRegistrations = registrationsResult.data.filter(
+            reg => !usedRegistrationIds.includes(reg.id)
+          )
+          
+          setRegistrations(availableRegistrations)
         } else {
           setRegistrations([])
         }
@@ -1237,47 +1251,6 @@ const SellProperty = () => {
                       Server-Side Pinning
                     </div>
                   </div>
-                </div>
-
-                {/* Listing Type - Premium Radio Cards */}
-                <div className={(!isEditMode && registrations.length === 0) ? 'opacity-50 pointer-events-none' : 'mb-8'}>
-                  <label className="block text-sm font-bold text-gray-900 mb-4 uppercase tracking-wider">
-                    Listing Intent
-                  </label>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div 
-                      onClick={() => handleInputChange('listingType', 'for_sale')}
-                      className={`radio-card p-3 ${formData.listingType === 'for_sale' ? 'radio-card-active' : 'border-gray-200'}`}
-                    >
-                      <input
-                        type="radio"
-                        checked={formData.listingType === 'for_sale'}
-                        onChange={() => {}}
-                        className="sr-only"
-                      />
-                      <span className="font-semibold">Sell Property</span>
-                    </div>
-
-                    {isEditMode && isPurchasedProperty && (
-                      <div 
-                        onClick={() => handleInputChange('listingType', null)}
-                        className={`radio-card p-3 ${!formData.listingType ? 'radio-card-active' : 'border-gray-200'}`}
-                      >
-                        <input
-                          type="radio"
-                          checked={!formData.listingType}
-                          onChange={() => {}}
-                          className="sr-only"
-                        />
-                        <span className="font-semibold">Internal Update Only</span>
-                      </div>
-                    )}
-                  </div>
-                  {isEditMode && isPurchasedProperty && (
-                    <p className="text-xs text-gray-500 mt-3 italic">
-                      You are refining details for a property you own. Listing is optional.
-                    </p>
-                  )}
                 </div>
 
                 <div className={registrations.length === 0 ? 'opacity-50 pointer-events-none' : ''}>

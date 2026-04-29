@@ -212,6 +212,7 @@ const useWallet = () => {
   }, [walletAddress, checkNetwork, loadBalance])
 
   const switchNetwork = async () => {
+    alert('Please open your Freighter wallet extension and manually switch the network to TESTNET.')
     setError('Please manually switch your Freighter wallet to the TESTNET network.')
   }
 
