@@ -65,7 +65,7 @@ const useWallet = () => {
       console.error('Error checking network:', err)
       setIsTestnet(false)
     }
-  }, [walletAddress])
+  }, [walletAddress, isFreighterInstalled])
 
   // Load wallet balance from Stellar API
   const loadBalance = useCallback(async () => {
