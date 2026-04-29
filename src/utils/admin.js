@@ -8,11 +8,6 @@ import { supabaseStorage } from '../lib/supabaseStorage'
 export const isAdmin = async (userId) => {
   if (!userId) return false
 
-  // Hardcode user admin access
-  if (userId === 'user_36lJ6ngLlKOF7mgXcG5pnabyMVL') {
-    return true
-  }
-
   try {
     const { data, error } = await supabaseStorage
       .from('profiles')
@@ -67,10 +62,6 @@ export const getAdminStatuses = async (userIds) => {
     data?.forEach((profile) => {
       statusMap[profile.id] = profile.is_admin === true
     })
-
-    if (userIds.includes('user_36lJ6ngLlKOF7mgXcG5pnabyMVL')) {
-      statusMap['user_36lJ6ngLlKOF7mgXcG5pnabyMVL'] = true
-    }
 
     return statusMap
   } catch (error) {

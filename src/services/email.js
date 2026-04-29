@@ -14,6 +14,18 @@
 const EMAIL_ENABLED = import.meta.env.VITE_EMAIL_ENABLED === 'true'
 const EMAIL_FROM = import.meta.env.VITE_EMAIL_FROM || 'onboarding@resend.dev'
 
+/**
+ * Escape user-controlled strings before inserting into HTML email templates.
+ * Prevents XSS/HTML-injection in email clients that render HTML.
+ */
+const esc = (str) =>
+  String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
 if (!EMAIL_ENABLED) {
   console.warn('⚠️ Email is disabled (VITE_EMAIL_ENABLED is not "true")')
 }
@@ -106,11 +118,11 @@ export const sendRegistrationSubmittedEmail = async (data) => {
           <h1>Registration Submitted</h1>
         </div>
         <div class="content">
-          <p>Dear ${data.ownerName},</p>
-          <p>Thank you for submitting your land registration for <strong>${data.propertyAddress}</strong>.</p>
+          <p>Dear ${esc(data.ownerName)},</p>
+          <p>Thank you for submitting your land registration for <strong>${esc(data.propertyAddress)}</strong>.</p>
           <p>Your registration has been received and is currently pending review. Our team typically reviews registrations within <strong>3-5 business days</strong>.</p>
           <p>You will receive an email notification once your registration has been reviewed.</p>
-          <p>Registration ID: <strong>${data.registrationId}</strong></p>
+          <p>Registration ID: <strong>${esc(data.registrationId)}</strong></p>
           <a href="${window.location.origin}/dashboard" class="button">View Dashboard</a>
         </div>
         <div class="footer">
@@ -154,10 +166,10 @@ export const sendRegistrationUnderReviewEmail = async (data) => {
           <h1>Registration Under Review</h1>
         </div>
         <div class="content">
-          <p>Dear ${data.ownerName},</p>
-          <p>Your land registration for <strong>${data.propertyAddress}</strong> is now under review by our team.</p>
+          <p>Dear ${esc(data.ownerName)},</p>
+          <p>Your land registration for <strong>${esc(data.propertyAddress)}</strong> is now under review by our team.</p>
           <p>We will notify you once the review is complete. This typically takes 1-2 business days.</p>
-          <p>Registration ID: <strong>${data.registrationId}</strong></p>
+          <p>Registration ID: <strong>${esc(data.registrationId)}</strong></p>
           <a href="${window.location.origin}/dashboard" class="button">View Status</a>
         </div>
         <div class="footer">
@@ -202,11 +214,11 @@ export const sendRegistrationApprovedEmail = async (data) => {
           <h1>✅ Registration Approved</h1>
         </div>
         <div class="content">
-          <p>Dear ${data.ownerName},</p>
-          <p>Great news! Your land registration for <strong>${data.propertyAddress}</strong> has been <strong>approved</strong>.</p>
-          ${data.reviewNotes ? `<div class="notes"><strong>Review Notes:</strong><br>${data.reviewNotes}</div>` : ''}
+          <p>Dear ${esc(data.ownerName)},</p>
+          <p>Great news! Your land registration for <strong>${esc(data.propertyAddress)}</strong> has been <strong>approved</strong>.</p>
+          ${data.reviewNotes ? `<div class="notes"><strong>Review Notes:</strong><br>${esc(data.reviewNotes)}</div>` : ''}
           <p>Your registration is now complete and has been processed successfully.</p>
-          <p>Registration ID: <strong>${data.registrationId}</strong></p>
+          <p>Registration ID: <strong>${esc(data.registrationId)}</strong></p>
           <a href="${window.location.origin}/dashboard" class="button">View Registration</a>
         </div>
         <div class="footer">
@@ -251,12 +263,12 @@ export const sendRegistrationRejectedEmail = async (data) => {
           <h1>Registration Review Update</h1>
         </div>
         <div class="content">
-          <p>Dear ${data.ownerName},</p>
-          <p>We have reviewed your land registration for <strong>${data.propertyAddress}</strong>.</p>
+          <p>Dear ${esc(data.ownerName)},</p>
+          <p>We have reviewed your land registration for <strong>${esc(data.propertyAddress)}</strong>.</p>
           <p>Unfortunately, your registration could not be approved at this time.</p>
-          ${data.reviewNotes ? `<div class="notes"><strong>Reason:</strong><br>${data.reviewNotes}</div>` : ''}
+          ${data.reviewNotes ? `<div class="notes"><strong>Reason:</strong><br>${esc(data.reviewNotes)}</div>` : ''}
           <p>You can edit and resubmit your registration if needed.</p>
-          <p>Registration ID: <strong>${data.registrationId}</strong></p>
+          <p>Registration ID: <strong>${esc(data.registrationId)}</strong></p>
           <a href="${window.location.origin}/dashboard" class="button">View Registration</a>
         </div>
         <div class="footer">
@@ -301,14 +313,14 @@ export const sendPropertyInquiryEmail = async (data) => {
           <h1>New Property Inquiry</h1>
         </div>
         <div class="content">
-          <p>Dear ${data.ownerName},</p>
-          <p>You have received a new inquiry for your property: <strong>${data.propertyTitle}</strong></p>
+          <p>Dear ${esc(data.ownerName)},</p>
+          <p>You have received a new inquiry for your property: <strong>${esc(data.propertyTitle)}</strong></p>
           <div class="info-box">
             <p><strong>Inquirer Details:</strong></p>
-            <p>Name: ${data.inquirerName}</p>
-            <p>Email: <a href="mailto:${data.inquirerEmail}">${data.inquirerEmail}</a></p>
-            ${data.inquirerPhone ? `<p>Phone: <a href="tel:${data.inquirerPhone}">${data.inquirerPhone}</a></p>` : ''}
-            ${data.message ? `<p><strong>Message:</strong><br>${data.message}</p>` : ''}
+            <p>Name: ${esc(data.inquirerName)}</p>
+            <p>Email: <a href="mailto:${esc(data.inquirerEmail)}">${esc(data.inquirerEmail)}</a></p>
+            ${data.inquirerPhone ? `<p>Phone: <a href="tel:${esc(data.inquirerPhone)}">${esc(data.inquirerPhone)}</a></p>` : ''}
+            ${data.message ? `<p><strong>Message:</strong><br>${esc(data.message)}</p>` : ''}
           </div>
           <a href="${data.propertyLink || window.location.origin + '/properties'}" class="button">View Property</a>
         </div>
@@ -354,8 +366,8 @@ export const sendPropertySoldEmail = async (data) => {
           <h1>Property ${action.charAt(0).toUpperCase() + action.slice(1)}</h1>
         </div>
         <div class="content">
-          <p>Dear ${data.ownerName},</p>
-          <p>Congratulations! Your property <strong>${data.propertyTitle}</strong> has been ${action}.</p>
+          <p>Dear ${esc(data.ownerName)},</p>
+          <p>Congratulations! Your property <strong>${esc(data.propertyTitle)}</strong> has been ${esc(action)}.</p>
           <p>You can view the details in your dashboard.</p>
           <a href="${window.location.origin}/dashboard" class="button">View Dashboard</a>
         </div>

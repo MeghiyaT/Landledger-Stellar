@@ -1,9 +1,10 @@
 import PropTypes from 'prop-types'
 import { useAuth } from '@clerk/clerk-react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 
 const ProtectedRoute = ({ children }) => {
   const { isLoaded, isSignedIn } = useAuth()
+  const location = useLocation()
 
   if (!isLoaded) {
     return (
@@ -17,7 +18,8 @@ const ProtectedRoute = ({ children }) => {
   }
 
   if (!isSignedIn) {
-    return <Navigate to="/login" replace />
+    // Preserve the intended destination so Login can redirect back after sign-in
+    return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />
   }
 
   return children

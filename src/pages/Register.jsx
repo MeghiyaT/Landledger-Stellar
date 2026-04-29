@@ -35,9 +35,9 @@ const Register = () => {
                   <Button
                     variant="primary"
                     className="w-full"
-                    onClick={() => navigate('/dashboard')}
+                    onClick={() => navigate('/')}
                   >
-                    Go to Dashboard
+                    Go to Homepage
                   </Button>
                   <Button
                     variant="outline"
@@ -70,7 +70,7 @@ const Register = () => {
               routing="path"
               path="/register"
               signInUrl="/login"
-              forceRedirectUrl="/dashboard"
+              forceRedirectUrl="/"
               appearance={{
                 elements: {
                   rootBox: 'mx-auto',

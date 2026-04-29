@@ -127,20 +127,24 @@ export const updateRegistration = async (registrationId, userId, updateData) => 
     return { data: null, error: fetchError }
   }
 
-  if (existing.status !== 'pending') {
+  if (existing.status !== 'pending' && existing.status !== 'rejected') {
     return {
       data: null,
       error: {
-        message: 'Only pending registrations can be edited. Please cancel and resubmit if needed.',
+        message: 'Only pending or rejected registrations can be edited. Please cancel and resubmit if needed.',
       },
     }
   }
+
+  // If re-submitting a rejected registration, reset status back to pending
+  const resetStatus = existing.status === 'rejected' ? { status: 'pending' } : {}
 
   // Update the registration
   const { data, error } = await supabase
     .from('registrations')
     .update({
       ...updateData,
+      ...resetStatus, // reset to pending if was rejected
       updated_at: new Date().toISOString(),
     })
     .eq('id', registrationId)

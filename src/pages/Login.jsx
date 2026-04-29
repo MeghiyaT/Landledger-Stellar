@@ -1,6 +1,6 @@
 
 import { SignIn, useUser, useClerk } from '@clerk/clerk-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Container from '../components/layout/Container'
 import Section from '../components/layout/Section'
 import Card from '../components/ui/Card'
@@ -8,6 +8,8 @@ import Button from '../components/ui/Button'
 
 const Login = () => {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const redirectTo = searchParams.get('redirect') || '/'
   const { isSignedIn, user } = useUser()
   const { signOut } = useClerk()
 
@@ -36,9 +38,9 @@ const Login = () => {
                   <Button
                     variant="primary"
                     className="w-full"
-                    onClick={() => navigate('/dashboard')}
+                    onClick={() => navigate('/')}
                   >
-                    Go to Dashboard
+                    Go to Homepage
                   </Button>
                   <Button
                     variant="outline"
@@ -71,7 +73,7 @@ const Login = () => {
               routing="path"
               path="/login"
               signUpUrl="/register"
-              forceRedirectUrl="/dashboard"
+              forceRedirectUrl={redirectTo}
               appearance={{
                 elements: {
                   rootBox: 'mx-auto',

@@ -42,15 +42,15 @@ const AdminRoute = ({ children }) => {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center max-w-md mx-auto px-4">
-          <h1 className="text-2xl font-bold mb-4 text-gray-900">Access Denied</h1>
+          <h1 className="text-2xl font-bold mb-4 text-gray-900">Page Not Found</h1>
           <p className="text-gray-700 mb-6">
-            You don't have permission to access this page. Admin access is required.
+            The page you're looking for doesn't exist or has been moved.
           </p>
           <Link
-            to="/dashboard"
+            to="/"
             className="inline-block px-6 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
           >
-            Go to Dashboard
+            Go to Homepage
           </Link>
         </div>
       </div>

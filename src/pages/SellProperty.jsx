@@ -234,7 +234,14 @@ const SellProperty = () => {
         address: registration.property_address || prev.address,
         type: mapRegistrationTypeToPropertyType(registration.property_type) || prev.type,
         sqft: registration.property_size ? String(registration.property_size) : prev.sqft,
-        title: registration.property_description ? (registration.property_description.length > 50 ? registration.property_description.substring(0, 50) + '...' : registration.property_description) : prev.title,
+        // Use property_title if available, fall back to first 60 chars of description
+        title: registration.property_title
+          ? registration.property_title
+          : (registration.property_description
+              ? (registration.property_description.length > 60
+                  ? registration.property_description.substring(0, 60).trimEnd() + '…'
+                  : registration.property_description)
+              : prev.title),
         description: registration.property_description || prev.description,
         // Extract location from address (try to get area/neighborhood)
         location: registration.property_address 

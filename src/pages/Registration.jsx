@@ -736,7 +736,7 @@ const Registration = () => {
                   <span className={`absolute -bottom-7 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors duration-300 ${
                     step <= currentStep ? 'text-primary' : 'text-gray-400'
                   }`}>
-                    {step === 1 ? 'Asset Details' : step === 2 ? 'Ownership' : 'Verification'}
+                    {step === 1 ? 'Property Details' : step === 2 ? 'Owner Info' : 'Documents'}
                   </span>
                 </div>
               ))}
