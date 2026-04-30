@@ -402,14 +402,18 @@ export const transferPropertyNFT = async (tokenId, fromAddress, toAddress) => {
 // --- PropertyNFT Service ---
 export const mintPropertyNFT = async (ownerAddress, propertyId, tokenUri) => {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-  if (!supabaseUrl) {
-    throw new Error('Supabase URL is not configured for NFT minting.')
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Supabase URL or Anon Key is not configured for NFT minting.')
   }
 
   const response = await fetch(`${supabaseUrl}/functions/v1/mint-property-nft`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${supabaseAnonKey}`,
+    },
     body: JSON.stringify({
       ownerAddress,
       propertyId,
