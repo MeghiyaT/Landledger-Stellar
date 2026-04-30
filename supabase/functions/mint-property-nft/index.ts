@@ -3,16 +3,30 @@
 // The admin key is stored as a Supabase secret (STELLAR_DEPLOYER_SECRET).
 // Called from the frontend after a property is successfully saved to the database.
 
-import {
+import { Buffer } from "node:buffer";
+import process from "node:process";
+
+// We MUST polyfill before loading stellar-sdk. 
+if (typeof globalThis.Buffer === "undefined") {
+  globalThis.Buffer = Buffer;
+}
+if (typeof globalThis.process === "undefined") {
+  globalThis.process = process;
+}
+
+// We MUST use dynamic import here! Static imports are hoisted and execute BEFORE
+// the polyfills above, which causes the 503 BOOT_ERROR we just fixed.
+const StellarSdk = await import("npm:@stellar/stellar-sdk@^12");
+const {
   Keypair,
   Networks,
   TransactionBuilder,
   BASE_FEE,
-  nativeToScVal,
   Contract,
   SorobanRpc,
+  Address,
   xdr,
-} from "npm:@stellar/stellar-sdk@^13";
+} = StellarSdk;
 
 const NETWORK_PASSPHRASE = Networks.TESTNET;
 const RPC_URL = "https://soroban-testnet.stellar.org";
@@ -31,7 +45,8 @@ function scValToNative(value: any) {
     case "scvU32":
       return value.u32();
     case "scvString":
-      return value.str().toString();
+      // FIX 1: use .bytes() not .str() — scvString stores raw bytes in the SDK
+      return value.bytes().toString("utf-8");
     case "scvBool":
       return value.b();
     case "scvVoid":
@@ -87,21 +102,15 @@ async function waitForSorobanTransaction(
   fallbackReturnValue: any,
 ) {
   for (let attempt = 0; attempt < MAX_TX_POLL_ATTEMPTS; attempt += 1) {
+    let sdkResponse: Awaited<ReturnType<typeof server.getTransaction>> | null = null;
+
     try {
-      const response = await server.getTransaction(hash);
+      sdkResponse = await server.getTransaction(hash);
+    } catch (sdkError) {
+      // FIX 5: only fall back to raw RPC on SDK-level transport errors,
+      // not on chain-level failures — those are handled below.
+      console.warn("SDK getTransaction threw, falling back to raw RPC:", sdkError);
 
-      if (response.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return {
-          hash,
-          returnValue: scValToNative(response.returnValue ?? fallbackReturnValue),
-        };
-      }
-
-      if (response.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(`Mint transaction failed on-chain for hash ${hash}`);
-      }
-    } catch (error) {
-      console.warn("Falling back to raw RPC getTransaction:", error);
       const rawResponse = await getRawSorobanTransaction(hash);
 
       if (rawResponse.status === "SUCCESS") {
@@ -117,8 +126,25 @@ async function waitForSorobanTransaction(
       if (rawResponse.status === "FAILED") {
         throw new Error(`Mint transaction failed on-chain for hash ${hash}`);
       }
+
+      // Still NOT_FOUND / pending — sleep and retry
+      await sleep(POLL_INTERVAL_MS);
+      continue;
     }
 
+    // SDK call succeeded — check the status without swallowing FAILED
+    if (sdkResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      return {
+        hash,
+        returnValue: scValToNative(sdkResponse.returnValue ?? fallbackReturnValue),
+      };
+    }
+
+    if (sdkResponse.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error(`Mint transaction failed on-chain for hash ${hash}`);
+    }
+
+    // NOT_FOUND / still pending
     await sleep(POLL_INTERVAL_MS);
   }
 
@@ -134,7 +160,7 @@ const corsHeaders = {
 Deno.serve(async (req: Request) => {
   // CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return json("ok", 200);
   }
 
   if (req.method !== "POST") {
@@ -171,16 +197,20 @@ Deno.serve(async (req: Request) => {
     const account = await server.getAccount(adminAddress);
 
     const txBuilder = new TransactionBuilder(account, {
-      fee: String(Number(BASE_FEE) * 10),
+      // FIX 4: use simulation-derived fee instead of a flat multiplier.
+      // We set a generous base here; prepareTransaction will override it
+      // with the actual resource fee from simulation.
+      fee: String(Number(BASE_FEE) * 100),
       networkPassphrase: NETWORK_PASSPHRASE,
     }).setTimeout(180);
 
+    // FIX 2: use Address.fromString().toScVal() for address arguments
     const mintOp = contract.call(
       "mint",
-      nativeToScVal(adminAddress, { type: "address" }),       // admin
-      nativeToScVal(ownerAddress, { type: "address" }),       // to
-      nativeToScVal(numericPropertyId, { type: "u32" }),      // property_id
-      nativeToScVal(tokenUri, { type: "string" }),            // token_uri
+      Address.fromString(adminAddress).toScVal(),          // admin
+      Address.fromString(ownerAddress).toScVal(),          // to
+      StellarSdk.nativeToScVal(numericPropertyId, { type: "u32" }), // property_id
+      StellarSdk.nativeToScVal(tokenUri, { type: "string" }),        // token_uri
     );
 
     const txInitial = txBuilder.addOperation(mintOp).build();
@@ -192,6 +222,7 @@ Deno.serve(async (req: Request) => {
     }
     const simulatedReturnValue = simulation.result?.retval ?? null;
 
+    // prepareTransaction assembles the real soroban resource fee from simulation
     const tx = await server.prepareTransaction(txInitial);
     tx.sign(adminKeypair);
 
