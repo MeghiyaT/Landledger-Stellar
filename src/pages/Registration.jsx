@@ -676,7 +676,7 @@ const Registration = () => {
                   : 'Your land registration request has been received. Our team will review your submission and contact you within 2-3 business days.'}
               </p>
               <div className="flex gap-4 justify-center">
-                <Button variant="primary" onClick={() => navigate('/dashboard')}>
+                <Button variant="primary" onClick={() => navigate('/dashboard?tab=Registrations')}>
                   View Dashboard
                 </Button>
                 <Button variant="outline" onClick={() => navigate('/')}>

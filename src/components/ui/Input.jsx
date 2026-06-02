@@ -35,6 +35,10 @@ const Input = ({
           ${className}
         `}
         {...props}
+        onWheel={(e) => {
+          e.target.blur()
+          if (props.onWheel) props.onWheel(e)
+        }}
       />
       {error && (
         <p className="mt-2 text-sm text-error">{error}</p>

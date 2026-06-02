@@ -48,7 +48,7 @@ const scValToNative = (value) => {
       return BigInt(parts.hi()) << 64n | BigInt(parts.lo())
     }
     case 'scvString':
-      return value.str().toString()
+      return new TextDecoder().decode(value.bytes())
     case 'scvSymbol':
       return value.sym().toString()
     case 'scvBool':

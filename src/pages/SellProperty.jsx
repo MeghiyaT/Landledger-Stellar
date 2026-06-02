@@ -72,7 +72,7 @@ const SellProperty = () => {
         
         if (propertyError || !property) {
           error('Property not found or you do not have permission to edit it.')
-          setTimeout(() => navigate('/dashboard'), 1500)
+          setTimeout(() => navigate('/dashboard?tab=My Listings'), 1500)
           return
         }
         
@@ -83,7 +83,7 @@ const SellProperty = () => {
         
         if (!isOwner && !isBuyer) {
           error('You can only edit your own properties.')
-          setTimeout(() => navigate('/dashboard'), 1500)
+          setTimeout(() => navigate('/dashboard?tab=My Listings'), 1500)
           return
         }
         
@@ -127,7 +127,7 @@ const SellProperty = () => {
       } catch (err) {
         console.error('Error loading property for edit:', err)
         error('Failed to load property for editing.')
-        navigate('/dashboard')
+        navigate('/dashboard?tab=My Listings')
       } finally {
         setIsLoadingProperty(false)
       }
@@ -1005,7 +1005,7 @@ const SellProperty = () => {
           }
           success(message)
           setTimeout(() => {
-            navigate('/dashboard')
+            navigate('/dashboard?tab=My Listings')
           }, 1500)
         } else {
           let message = 'Property listed successfully!'
@@ -1600,7 +1600,7 @@ const SellProperty = () => {
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => navigate('/dashboard')}
+                    onClick={() => navigate('/dashboard?tab=My Listings')}
                     disabled={isSubmitting || isLoadingProperty}
                   >
                     Cancel

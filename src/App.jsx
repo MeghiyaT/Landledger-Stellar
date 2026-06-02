@@ -19,6 +19,7 @@ import VerifyCertificatePDF from './pages/VerifyCertificatePDF'
 import About from './pages/About'
 import NotFound from './pages/NotFound'
 import AdminRoute from './components/AdminRoute'
+import GlobalWalletModal from './components/GlobalWalletModal'
 import { setClerkTokenGetter } from './lib/supabase'
 
 // Get Clerk publishable key from environment variables
@@ -110,6 +111,7 @@ function App() {
             <Footer />
           </div>
         </Router>
+        <GlobalWalletModal />
       </SupabaseClerkTokenBridge>
     </ClerkProvider>
   )

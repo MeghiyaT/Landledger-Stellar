@@ -37,11 +37,9 @@ use soroban_sdk::{
 
 // ── Type aliases (matching SEP-50 spec) ──────────────────────────────────────
 
-/// SEP-50 uses a generic `TokenID` unsigned integer.  We use `u32` which
-/// covers all realistic property counts.
-
-
-/// `u32` should be the same type as `TokenID` per the SEP-50 spec.
+// SEP-50 uses a generic `TokenID` unsigned integer.  We use `u32` which
+// covers all realistic property counts.
+// `u32` should be the same type as `TokenID` per the SEP-50 spec.
 
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
