@@ -6,7 +6,7 @@
 import { Buffer } from "node:buffer";
 import process from "node:process";
 
-// We MUST polyfill before loading stellar-sdk. 
+// Polyfill globals BEFORE any stellar-sdk code loads.
 if (typeof globalThis.Buffer === "undefined") {
   globalThis.Buffer = Buffer;
 }
@@ -14,9 +14,10 @@ if (typeof globalThis.process === "undefined") {
   globalThis.process = process;
 }
 
-// We MUST use dynamic import here! Static imports are hoisted and execute BEFORE
-// the polyfills above, which causes the 503 BOOT_ERROR we just fixed.
-const StellarSdk = await import("npm:@stellar/stellar-sdk@^12");
+// Use a stable, well-tested version that is known to work in Deno / Supabase Edge.
+// v12 is the last version that shipped SorobanRpc as a named export without issues.
+// We import the /rpc sub-path directly to avoid the problematic SorobanRpc re-export.
+const StellarSdk = await import("npm:@stellar/stellar-sdk@12");
 const {
   Keypair,
   Networks,
@@ -26,6 +27,7 @@ const {
   SorobanRpc,
   Address,
   xdr,
+  nativeToScVal,
 } = StellarSdk;
 
 const NETWORK_PASSPHRASE = Networks.TESTNET;
@@ -38,14 +40,18 @@ const MAX_TX_POLL_ATTEMPTS = 20;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function scValToNative(value: any) {
+function scValToNative(value: any): any {
   if (!value) return null;
 
-  switch (value.switch().name) {
+  const name = value.switch().name;
+  switch (name) {
     case "scvU32":
       return value.u32();
+    case "scvI32":
+      return value.i32();
+    case "scvU64":
+      return Number(value.u64());
     case "scvString":
-      // FIX 1: use .bytes() not .str() — scvString stores raw bytes in the SDK
       return value.bytes().toString("utf-8");
     case "scvBool":
       return value.b();
@@ -58,20 +64,41 @@ function scValToNative(value: any) {
 
 function decodeScValFromBase64(encoded?: string | null) {
   if (!encoded) return null;
-  return scValToNative(xdr.ScVal.fromXDR(encoded, "base64"));
+  try {
+    return scValToNative(xdr.ScVal.fromXDR(encoded, "base64"));
+  } catch {
+    return null;
+  }
 }
 
-function extractFnReturnFromDiagnostics(diagnosticEventsXdr: string[] = [], methodName: string) {
+function extractFnReturnFromDiagnostics(
+  diagnosticEventsXdr: string[] = [],
+  methodName: string,
+) {
   for (const encoded of diagnosticEventsXdr) {
-    const diagnosticEvent = xdr.DiagnosticEvent.fromXDR(encoded, "base64");
-    const body = diagnosticEvent.event().body().v0();
-    const topics = body.topics().map(scValToNative);
+    try {
+      const diagnosticEvent = xdr.DiagnosticEvent.fromXDR(encoded, "base64");
+      const contractEvent = diagnosticEvent.event();
+      const body = contractEvent.body();
 
-    if (topics[0] === "fn_return" && topics[1] === methodName) {
-      return scValToNative(body.data());
+      // v0() may throw on newer protocol — guard with try/catch
+      let topics: any[] = [];
+      let data: any = null;
+      try {
+        const v0 = body.v0();
+        topics = v0.topics().map(scValToNative);
+        data = scValToNative(v0.data());
+      } catch {
+        continue;
+      }
+
+      if (topics[0] === "fn_return" && topics[1] === methodName) {
+        return data;
+      }
+    } catch {
+      continue;
     }
   }
-
   return null;
 }
 
@@ -89,62 +116,44 @@ async function getRawSorobanTransaction(hash: string) {
 
   const payload = await response.json();
   if (payload.error) {
-    throw new Error(payload.error.message || `Raw RPC getTransaction failed for ${hash}`);
+    throw new Error(
+      payload.error.message || `Raw RPC getTransaction failed for ${hash}`,
+    );
   }
-
   return payload.result;
 }
 
 async function waitForSorobanTransaction(
-  server: SorobanRpc.Server,
+  server: any,
   hash: string,
   methodName: string,
   fallbackReturnValue: any,
 ) {
   for (let attempt = 0; attempt < MAX_TX_POLL_ATTEMPTS; attempt += 1) {
-    let sdkResponse: Awaited<ReturnType<typeof server.getTransaction>> | null = null;
+    // Always use raw RPC to avoid SDK XDR decode issues with newer protocol versions
+    const rawResponse = await getRawSorobanTransaction(hash);
 
-    try {
-      sdkResponse = await server.getTransaction(hash);
-    } catch (sdkError) {
-      // FIX 5: only fall back to raw RPC on SDK-level transport errors,
-      // not on chain-level failures — those are handled below.
-      console.warn("SDK getTransaction threw, falling back to raw RPC:", sdkError);
+    if (rawResponse.status === "SUCCESS") {
+      const returnValue =
+        decodeScValFromBase64(rawResponse.returnValue) ??
+        extractFnReturnFromDiagnostics(
+          rawResponse.diagnosticEventsXdr || [],
+          methodName,
+        ) ??
+        scValToNative(fallbackReturnValue);
 
-      const rawResponse = await getRawSorobanTransaction(hash);
-
-      if (rawResponse.status === "SUCCESS") {
-        return {
-          hash,
-          returnValue:
-            decodeScValFromBase64(rawResponse.returnValue) ??
-            extractFnReturnFromDiagnostics(rawResponse.diagnosticEventsXdr || [], methodName) ??
-            scValToNative(fallbackReturnValue),
-        };
-      }
-
-      if (rawResponse.status === "FAILED") {
-        throw new Error(`Mint transaction failed on-chain for hash ${hash}`);
-      }
-
-      // Still NOT_FOUND / pending — sleep and retry
-      await sleep(POLL_INTERVAL_MS);
-      continue;
+      return { hash, returnValue };
     }
 
-    // SDK call succeeded — check the status without swallowing FAILED
-    if (sdkResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      return {
-        hash,
-        returnValue: scValToNative(sdkResponse.returnValue ?? fallbackReturnValue),
-      };
+    if (rawResponse.status === "FAILED") {
+      // Try to get diagnostic info
+      const diagInfo = (rawResponse.diagnosticEventsXdr || []).slice(0, 3);
+      throw new Error(
+        `Mint transaction failed on-chain for hash ${hash}. Diagnostics: ${diagInfo.join(", ")}`,
+      );
     }
 
-    if (sdkResponse.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`Mint transaction failed on-chain for hash ${hash}`);
-    }
-
-    // NOT_FOUND / still pending
+    // NOT_FOUND or still pending — wait and retry
     await sleep(POLL_INTERVAL_MS);
   }
 
@@ -154,7 +163,8 @@ async function waitForSorobanTransaction(
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 Deno.serve(async (req: Request) => {
@@ -171,13 +181,19 @@ Deno.serve(async (req: Request) => {
     const { ownerAddress, propertyId, tokenUri } = await req.json();
 
     if (!ownerAddress || !propertyId || !tokenUri) {
-      return json({ error: "Missing required fields: ownerAddress, propertyId, tokenUri" }, 400);
+      return json(
+        { error: "Missing required fields: ownerAddress, propertyId, tokenUri" },
+        400,
+      );
     }
 
     // Load admin keypair from Supabase secret
     const deployerSecret = Deno.env.get("STELLAR_DEPLOYER_SECRET");
     if (!deployerSecret) {
-      return json({ error: "Server misconfiguration: deployer secret not set" }, 500);
+      return json(
+        { error: "Server misconfiguration: deployer secret not set" },
+        500,
+      );
     }
 
     const adminKeypair = Keypair.fromSecret(deployerSecret);
@@ -186,8 +202,18 @@ Deno.serve(async (req: Request) => {
     // Ensure property_id is a valid u32
     const numericPropertyId = parseInt(propertyId, 10);
     if (isNaN(numericPropertyId) || numericPropertyId < 0) {
-      return json({ error: "Property must have a valid on-chain property ID before NFT minting" }, 400);
+      return json(
+        {
+          error:
+            "Property must have a valid on-chain property ID before NFT minting",
+        },
+        400,
+      );
     }
+
+    console.log(`[mint-property-nft] Minting NFT for property #${numericPropertyId} to ${ownerAddress}`);
+    console.log(`[mint-property-nft] Admin: ${adminAddress}`);
+    console.log(`[mint-property-nft] Contract: ${NFT_CONTRACT_ID}`);
 
     // Set up RPC server
     const server = new SorobanRpc.Server(RPC_URL);
@@ -197,20 +223,16 @@ Deno.serve(async (req: Request) => {
     const account = await server.getAccount(adminAddress);
 
     const txBuilder = new TransactionBuilder(account, {
-      // FIX 4: use simulation-derived fee instead of a flat multiplier.
-      // We set a generous base here; prepareTransaction will override it
-      // with the actual resource fee from simulation.
       fee: String(Number(BASE_FEE) * 100),
       networkPassphrase: NETWORK_PASSPHRASE,
     }).setTimeout(180);
 
-    // FIX 2: use Address.fromString().toScVal() for address arguments
     const mintOp = contract.call(
       "mint",
-      Address.fromString(adminAddress).toScVal(),          // admin
-      Address.fromString(ownerAddress).toScVal(),          // to
-      StellarSdk.nativeToScVal(numericPropertyId, { type: "u32" }), // property_id
-      StellarSdk.nativeToScVal(tokenUri, { type: "string" }),        // token_uri
+      Address.fromString(adminAddress).toScVal(), // admin
+      Address.fromString(ownerAddress).toScVal(), // to
+      nativeToScVal(numericPropertyId, { type: "u32" }), // property_id
+      nativeToScVal(tokenUri, { type: "string" }), // token_uri
     );
 
     const txInitial = txBuilder.addOperation(mintOp).build();
@@ -218,6 +240,7 @@ Deno.serve(async (req: Request) => {
     // Simulate first to get footprint & fees
     const simulation = await server.simulateTransaction(txInitial);
     if (SorobanRpc.Api.isSimulationError(simulation)) {
+      console.error("[mint-property-nft] Simulation error:", simulation.error);
       return json({ error: `Simulation failed: ${simulation.error}` }, 500);
     }
     const simulatedReturnValue = simulation.result?.retval ?? null;
@@ -227,17 +250,29 @@ Deno.serve(async (req: Request) => {
     tx.sign(adminKeypair);
 
     const result = await server.sendTransaction(tx);
+    console.log(`[mint-property-nft] Transaction submitted: ${result.hash} status: ${result.status}`);
 
     if (result.status === "ERROR") {
-      return json({ error: "Transaction submission failed", details: result }, 500);
+      return json(
+        { error: "Transaction submission failed", details: result },
+        500,
+      );
     }
 
-    const finalResult = await waitForSorobanTransaction(server, result.hash, "mint", simulatedReturnValue);
+    const finalResult = await waitForSorobanTransaction(
+      server,
+      result.hash,
+      "mint",
+      simulatedReturnValue,
+    );
     const tokenId = finalResult.returnValue;
 
     if (typeof tokenId !== "number") {
+      console.error("[mint-property-nft] Unexpected tokenId type:", typeof tokenId, tokenId);
       return json({ error: "Mint did not return a valid token ID" }, 500);
     }
+
+    console.log(`[mint-property-nft] Successfully minted token #${tokenId}`);
 
     return json({
       success: true,
