@@ -1174,6 +1174,7 @@ const SellProperty = () => {
                           {(selectedPropertySource === 'registration' ? registrations : purchasedProperties).map((item) => {
                             const isRegistration = selectedPropertySource === 'registration';
                             const id = isRegistration ? item.id : item.id;
+                            const uniqueKey = `${isRegistration ? 'reg' : 'pur'}-${id}`;
                             const isSelected = selectedRegistrationId === id;
                             const title = isRegistration ? (item.property_description || 'Registered Property') : item.title;
                             const subtitle = isRegistration ? item.property_address : item.location;
@@ -1181,7 +1182,7 @@ const SellProperty = () => {
                             
                             return (
                               <div 
-                                key={id}
+                                key={uniqueKey}
                                 onClick={() => handleRegistrationChange(isSelected ? '' : id)}
                                 className={`cursor-pointer border rounded-xl p-4 transition-all duration-200 relative overflow-hidden ${
                                   isSelected 
