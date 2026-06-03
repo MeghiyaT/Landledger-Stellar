@@ -83,7 +83,24 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
     
     // We update the metadata while preserving existing data (like offer_id)
     if (pendingTransactionId) {
-        const { data: currentTx } = await supabase.from('transactions').select('metadata').eq('id', pendingTransactionId).single();
+        const { data: currentTx, error: fetchTxError } = await supabase
+          .from('transactions')
+          .select('metadata')
+          .eq('id', pendingTransactionId)
+          .single();
+
+        if (fetchTxError) {
+          console.error('Escrow DB: failed to fetch buyer transaction metadata:', fetchTxError)
+          // On-chain succeeded — return the hash but surface the DB error so UI shows it
+          return {
+            data: null,
+            error: {
+              message: `Payment was sent on-chain (TX: ${result.hash.slice(0, 12)}…) but the transaction record could not be updated due to a database permission error. Please run the fix-transactions-rls.sql script in your Supabase SQL Editor to resolve this.`,
+              txHash: result.hash,
+            }
+          }
+        }
+
         updateData.metadata = {
           ...currentTx?.metadata,
           escrow_type: 'native',
@@ -95,19 +112,46 @@ export const createEscrowTransaction = async (propertyId, sellerId, buyerId, amo
         }
         
         // Update buyer tx
-        await supabase.from('transactions').update(updateData).eq('id', pendingTransactionId);
+        const { error: buyerUpdateError } = await supabase
+          .from('transactions')
+          .update(updateData)
+          .eq('id', pendingTransactionId);
+
+        if (buyerUpdateError) {
+          console.error('Escrow DB: failed to update buyer transaction:', buyerUpdateError)
+          return {
+            data: null,
+            error: {
+              message: `Payment was sent on-chain (TX: ${result.hash.slice(0, 12)}…) but your transaction record could not be updated. This is a database permission issue — please run the fix-transactions-rls.sql script in your Supabase SQL Editor.`,
+              txHash: result.hash,
+            }
+          }
+        }
         
-        // Update seller tx
+        // Update seller tx (non-fatal — log a warning but do not block the buyer)
         if (sellerTxId) {
-            const { data: currentSellerTx } = await supabase.from('transactions').select('metadata').eq('id', sellerTxId).single();
-            await supabase.from('transactions').update({
+            const { data: currentSellerTx } = await supabase
+              .from('transactions')
+              .select('metadata')
+              .eq('id', sellerTxId)
+              .single();
+
+            const { error: sellerUpdateError } = await supabase
+              .from('transactions')
+              .update({
                 ...updateData,
                 metadata: {
                     ...currentSellerTx?.metadata,
                     escrow_ready: true,
                     ...updateData.metadata
                 }
-            }).eq('id', sellerTxId);
+              })
+              .eq('id', sellerTxId);
+
+            if (sellerUpdateError) {
+              // Non-fatal: buyer tx succeeded, just log the seller sync failure
+              console.warn('Escrow DB: failed to update seller transaction (non-fatal):', sellerUpdateError)
+            }
         }
         
         return { data: { hash: result.hash }, error: null }

@@ -13,11 +13,59 @@ import {
 
 const RPC_URL = 'https://soroban-testnet.stellar.org'
 const NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015'
-const POLL_INTERVAL_MS = 1500
-const MAX_TX_POLL_ATTEMPTS = 20
+const INITIAL_POLL_INTERVAL_MS = 1500
+const MAX_TX_POLL_ATTEMPTS = 40
+const MAX_SUBMIT_RETRIES = 3
+const TX_TIMEOUT_SECONDS = 180
 const DEFAULT_NFT_APPROVAL_LEDGER_BUFFER = 518400
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Progressive backoff: starts at 1.5s, moves to 3s after 15 attempts, then 5s after 30.
+ * Total wait time: ~15×1.5 + 15×3 + 10×5 = 22.5 + 45 + 50 = ~117s (~2 min)
+ */
+const getPollInterval = (attempt) => {
+  if (attempt < 15) return INITIAL_POLL_INTERVAL_MS
+  if (attempt < 30) return 3000
+  return 5000
+}
+
+/**
+ * Fetch dynamic fee from the network. Uses 2× the 80th-percentile fee
+ * to stay competitive during congestion. Falls back to 10× BASE_FEE.
+ */
+const getDynamicFee = async () => {
+  try {
+    const response = await fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'fee-stats',
+        method: 'getFeeStats',
+        params: {},
+      }),
+    })
+    const payload = await response.json()
+    if (payload.result) {
+      // sorobanInclusionFee contains the actual Soroban fee market stats
+      const stats = payload.result.sorobanInclusionFee || payload.result.inclusionFee
+      if (stats) {
+        const p80Fee = parseInt(stats.p80 || stats.p90 || '100', 10)
+        const dynamicFee = Math.max(p80Fee * 2, parseInt(BASE_FEE, 10) * 10).toString()
+        console.log(`[Soroban] Dynamic fee: ${dynamicFee} stroops (p80=${stats.p80}, p90=${stats.p90})`)
+        return dynamicFee
+      }
+    }
+  } catch (err) {
+    console.warn('[Soroban] Could not fetch fee stats, using fallback:', err.message)
+  }
+  // Fallback: 10× base fee (1000 stroops)
+  const fallbackFee = (parseInt(BASE_FEE, 10) * 10).toString()
+  console.log(`[Soroban] Using fallback fee: ${fallbackFee} stroops`)
+  return fallbackFee
+}
 
 const parseRequiredU32 = (value, label) => {
   const parsed = parseInt(value, 10)
@@ -100,11 +148,16 @@ const getRawSorobanTransaction = async (hash) => {
 }
 
 const waitForSorobanTransaction = async (server, hash, methodName, fallbackReturnValue = null) => {
+  console.log(`[Soroban] Polling for tx ${hash} (up to ${MAX_TX_POLL_ATTEMPTS} attempts with backoff)`)
+
   for (let attempt = 0; attempt < MAX_TX_POLL_ATTEMPTS; attempt += 1) {
+    const interval = getPollInterval(attempt)
+
     try {
       const response = await server.getTransaction(hash)
 
       if (response.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+        console.log(`[Soroban] tx ${hash} confirmed after ${attempt + 1} attempts`)
         return {
           hash,
           returnValue: scValToNative(response.returnValue ?? fallbackReturnValue),
@@ -115,32 +168,61 @@ const waitForSorobanTransaction = async (server, hash, methodName, fallbackRetur
       if (response.status === rpc.Api.GetTransactionStatus.FAILED) {
         throw new Error(`Transaction failed on-chain for hash ${hash}`)
       }
-    } catch (error) {
-      console.warn('[Soroban] SDK getTransaction decode failed, falling back to raw RPC:', error.message)
-      const rawResponse = await getRawSorobanTransaction(hash)
 
-      if (rawResponse.status === 'SUCCESS') {
-        const returnValue =
-          decodeScValFromBase64(rawResponse.returnValue) ??
-          extractFnReturnFromDiagnostics(rawResponse.diagnosticEventsXdr || [], methodName) ??
-          scValToNative(fallbackReturnValue)
-
-        return {
-          hash,
-          returnValue,
-          rawReturnValue: rawResponse.returnValue ?? null,
+      // NOT_FOUND — transaction still pending, continue polling
+      if (response.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
+        if (attempt % 5 === 0) {
+          console.log(`[Soroban] tx ${hash} not yet found (attempt ${attempt + 1}/${MAX_TX_POLL_ATTEMPTS}, next poll in ${interval}ms)`)
         }
       }
+    } catch (error) {
+      // Only fall back to raw RPC for decode errors, not for explicit failures re-thrown above
+      if (error.message?.includes('failed on-chain')) {
+        throw error
+      }
 
-      if (rawResponse.status === 'FAILED') {
-        throw new Error(`Transaction failed on-chain for hash ${hash}`)
+      console.warn(`[Soroban] SDK getTransaction error (attempt ${attempt + 1}), trying raw RPC:`, error.message)
+
+      try {
+        const rawResponse = await getRawSorobanTransaction(hash)
+
+        if (rawResponse.status === 'SUCCESS') {
+          console.log(`[Soroban] tx ${hash} confirmed via raw RPC after ${attempt + 1} attempts`)
+          const returnValue =
+            decodeScValFromBase64(rawResponse.returnValue) ??
+            extractFnReturnFromDiagnostics(rawResponse.diagnosticEventsXdr || [], methodName) ??
+            scValToNative(fallbackReturnValue)
+
+          return {
+            hash,
+            returnValue,
+            rawReturnValue: rawResponse.returnValue ?? null,
+          }
+        }
+
+        if (rawResponse.status === 'FAILED') {
+          throw new Error(`Transaction failed on-chain for hash ${hash}`)
+        }
+
+        // NOT_FOUND from raw RPC — still pending
+        if (rawResponse.status === 'NOT_FOUND' && attempt % 5 === 0) {
+          console.log(`[Soroban] raw RPC: tx ${hash} not found yet (attempt ${attempt + 1}/${MAX_TX_POLL_ATTEMPTS})`)
+        }
+      } catch (rawError) {
+        if (rawError.message?.includes('failed on-chain')) {
+          throw rawError
+        }
+        console.warn(`[Soroban] raw RPC also failed (attempt ${attempt + 1}):`, rawError.message)
       }
     }
 
-    await sleep(POLL_INTERVAL_MS)
+    await sleep(interval)
   }
 
-  throw new Error(`Timed out waiting for Soroban transaction ${hash}`)
+  throw new Error(
+    `Timed out waiting for Soroban transaction ${hash} after ${MAX_TX_POLL_ATTEMPTS} attempts (~2 min). ` +
+    `The transaction may still be processing — check https://stellar.expert/explorer/testnet/tx/${hash}`
+  )
 }
 
 const readSoroban = async (contractId, method, args = []) => {
@@ -180,67 +262,115 @@ export const getContractAddresses = () => {
 }
 
 /**
- * Helper to invoke a Soroban contract method.
+ * Helper to invoke a Soroban contract method with resilient submission.
+ * - Uses dynamic fee based on current network congestion
+ * - Transaction envelope valid for 180s (vs 30s default)
+ * - Retries the full build→sign→submit cycle up to 3 times on tx-not-found
  * Designed for @stellar/freighter-api v3.1.0
  */
 const invokeSoroban = async (contractId, method, args = []) => {
   const { address } = await getAddress()
   const server = new rpc.Server(RPC_URL)
-  const account = await server.getAccount(address)
   const contract = new Contract(contractId)
 
-  // 1. Build initial transaction
-  const txInitial = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(30)
-    .build()
+  // Fetch dynamic fee once (shared across retries)
+  const fee = await getDynamicFee()
 
-  // 2. Simulate transaction to get footprint and resource usage
-  const simulation = await server.simulateTransaction(txInitial)
-  if (rpc.Api.isSimulationError(simulation)) {
-    throw new Error(`Simulation failed: ${simulation.error}`)
+  let lastError = null
+
+  for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`[Soroban] Retry attempt ${attempt}/${MAX_SUBMIT_RETRIES} for ${method}`)
+        // Brief pause before retry to let the network settle
+        await sleep(2000)
+      }
+
+      // Re-fetch account on each attempt to get a fresh sequence number
+      const account = await server.getAccount(address)
+
+      // 1. Build initial transaction with dynamic fee and longer timeout
+      const txInitial = new TransactionBuilder(account, {
+        fee,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(contract.call(method, ...args))
+        .setTimeout(TX_TIMEOUT_SECONDS)
+        .build()
+
+      // 2. Simulate transaction to get footprint and resource usage
+      const simulation = await server.simulateTransaction(txInitial)
+      if (rpc.Api.isSimulationError(simulation)) {
+        throw new Error(`Simulation failed: ${simulation.error}`)
+      }
+      const simulatedReturnValue = simulation.result?.retval ?? null
+
+      // 3. Prepare transaction with simulation results (injects resource fees)
+      const tx = await server.prepareTransaction(txInitial)
+
+      // 4. Sign transaction via Freighter
+      const xdrString = tx.toXDR()
+      console.log(`[Soroban] Sending to Freighter for signing (attempt ${attempt}, fee=${fee}, timeout=${TX_TIMEOUT_SECONDS}s):`, xdrString.slice(0, 80) + '...')
+
+      const response = await signTransaction(xdrString, {
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+
+      console.log('[Soroban] Freighter response:', response)
+
+      // Check for Freighter-level errors (e.g. user rejected, network mismatch)
+      if (response.error) {
+        throw new Error(`Freighter error: ${JSON.stringify(response.error)}`)
+      }
+
+      const signedXdr = response.signedTxXdr
+      if (!signedXdr) {
+        throw new Error('Freighter returned empty signedTxXdr. User may have rejected the request.')
+      }
+
+      // 5. Submit signed transaction
+      const txToSubmit = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE)
+      const result = await server.sendTransaction(txToSubmit)
+      console.log(`[Soroban] Transaction submitted (attempt ${attempt}):`, result.hash, result.status)
+
+      if (result.status === 'ERROR') {
+        // Submission-level error — may be recoverable with a fresh sequence number
+        const errorMsg = result.errorResult
+          ? `Submission error: ${JSON.stringify(result.errorResult)}`
+          : `Soroban transaction submission failed for ${method}`
+        console.warn(`[Soroban] ${errorMsg}`)
+        lastError = new Error(errorMsg)
+        continue // retry
+      }
+
+      // 6. Poll for confirmation
+      const finalResult = await waitForSorobanTransaction(server, result.hash, method, simulatedReturnValue)
+      return finalResult
+    } catch (err) {
+      lastError = err
+
+      // Don't retry if the user rejected or there's a simulation failure
+      const noRetryPatterns = [
+        'Freighter error',
+        'Freighter returned empty',
+        'User may have rejected',
+        'Simulation failed',
+        'failed on-chain',
+      ]
+      if (noRetryPatterns.some(p => err.message?.includes(p))) {
+        throw err
+      }
+
+      // Timed-out or NOT_FOUND — worth retrying with fresh sequence
+      console.warn(`[Soroban] Attempt ${attempt}/${MAX_SUBMIT_RETRIES} failed for ${method}:`, err.message)
+
+      if (attempt === MAX_SUBMIT_RETRIES) {
+        break
+      }
+    }
   }
-  const simulatedReturnValue = simulation.result?.retval ?? null
 
-  // 3. Prepare transaction with simulation results (injects resource fees)
-  const tx = await server.prepareTransaction(txInitial)
-
-  // 4. Sign transaction
-  // Freighter API v3.1.0: signTransaction(xdr, { networkPassphrase })
-  // Returns: { signedTxXdr: string, signerAddress: string, error?: object }
-  const xdrString = tx.toXDR()
-  console.log('[Soroban] Sending to Freighter for signing:', xdrString.slice(0, 80) + '...')
-
-  const response = await signTransaction(xdrString, {
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-
-  console.log('[Soroban] Freighter response:', response)
-
-  // Check for Freighter-level errors (e.g. user rejected, network mismatch)
-  if (response.error) {
-    throw new Error(`Freighter error: ${JSON.stringify(response.error)}`)
-  }
-
-  const signedXdr = response.signedTxXdr
-  if (!signedXdr) {
-    throw new Error('Freighter returned empty signedTxXdr. User may have rejected the request.')
-  }
-
-  // 5. Submit signed transaction
-  const txToSubmit = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE)
-  const result = await server.sendTransaction(txToSubmit)
-  console.log('[Soroban] Transaction submitted:', result.hash, result.status)
-
-  if (result.status === 'ERROR') {
-    throw new Error(`Soroban transaction submission failed for ${method}`)
-  }
-
-  const finalResult = await waitForSorobanTransaction(server, result.hash, method, simulatedReturnValue)
-  return finalResult
+  throw lastError || new Error(`All ${MAX_SUBMIT_RETRIES} attempts failed for ${method}`)
 }
 
 // --- PropertyRegistry Service ---

@@ -707,11 +707,18 @@ const Dashboard = () => {
       )
 
       if (response.error) {
-        error(`Failed to lock funds: ${response.error.message}`)
+        // If txHash is present on the error, the on-chain payment succeeded but the DB update
+        // failed (e.g. RLS). Show a warning (not an error) so the user knows funds moved.
+        if (response.error.txHash) {
+          error(`⚠️ ${response.error.message}`)
+        } else {
+          error(`Failed to lock funds: ${response.error.message}`)
+        }
+        await loadData() // Reload in case partial state was saved
         return
       }
 
-      success('Funds successfully locked in escrow!')
+      success('Funds successfully locked in escrow! The transaction is now in progress.')
       await loadData()
     } catch (err) {
       console.error('Error creating escrow:', err)

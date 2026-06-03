@@ -196,16 +196,16 @@ export const updateTransactionStatus = async (transactionId, status, userId) => 
       // Notify buyer about property purchased
       await notifyPropertyPurchased(
         buyerId,
-        updatedProperty.title || 'Property',
-        updatedProperty.id
+        updatedProperty.property_title || 'Property',
+        updatedProperty.property_id
       ).catch(err => console.error('Error notifying buyer:', err))
       
       // Notify seller about property sold
       if (sellerId) {
         await notifyPropertySold(
           sellerId,
-          updatedProperty.title || 'Property',
-          updatedProperty.id
+          updatedProperty.property_title || 'Property',
+          updatedProperty.property_id
         ).catch(err => console.error('Error notifying seller:', err))
       }
     }
