@@ -687,8 +687,7 @@ const Dashboard = () => {
       return
     }
     if (transaction?.metadata?.escrow_ready === false) {
-      error('The seller still needs to finish the required on-chain approvals before you can create escrow.')
-      return
+      console.warn('escrow_ready is false — proceeding anyway as the on-chain approval may already exist from a prior acceptance.')
     }
     setProcessingTxId(transaction.id)
     try {

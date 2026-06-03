@@ -683,7 +683,7 @@ const PropertyDetails = () => {
               <NFTInfo property={property} />
 
               {/* Blockchain Ownership History */}
-              {property?.blockchain_property_id && (
+              {(property?.blockchain_property_id || property?.status === 'sold') && (
                 <Card padding="md">
                   <BlockchainOwnershipHistory property={property} />
                 </Card>

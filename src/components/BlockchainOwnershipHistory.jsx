@@ -11,7 +11,8 @@ const BlockchainOwnershipHistory = ({ property, className = '' }) => {
 
   useEffect(() => {
     const loadOwnershipHistory = async () => {
-      if (!property?.blockchain_property_id) {
+      // We now query by property UUID, not blockchain_property_id
+      if (!property?.id) {
         setOwnershipHistory(null)
         return
       }
@@ -19,30 +20,33 @@ const BlockchainOwnershipHistory = ({ property, className = '' }) => {
       setIsLoading(true)
       setError(null)
       try {
-        const history = await getPropertyOwnershipHistory(property.blockchain_property_id)
+        const history = await getPropertyOwnershipHistory(property.id)
 
-        // Convert history to readable format
-        const formattedHistory = history.map((entry, index) => ({
-          id: index,
+        // The service already returns formatted data
+        const formattedHistory = history.map((entry) => ({
+          id: entry.id,
           previousOwner: entry.previousOwner,
           newOwner: entry.newOwner,
-          timestamp: new Date(Number(entry.timestamp) * 1000),
+          timestamp: new Date(entry.timestamp),
           transferType: entry.transferType,
+          blockchainTxHash: entry.blockchainTxHash,
+          nftTransferTxHash: entry.nftTransferTxHash,
         }))
 
         setOwnershipHistory(formattedHistory)
       } catch (err) {
-        console.error('Error loading blockchain ownership history:', err)
-        setError('Failed to load ownership history from blockchain')
+        console.error('Error loading ownership history:', err)
+        setError('Failed to load ownership history')
       } finally {
         setIsLoading(false)
       }
     }
 
     loadOwnershipHistory()
-  }, [property?.blockchain_property_id])
+  }, [property?.id])
 
-  if (!property?.blockchain_property_id) {
+  // Show the component if the property exists (don't require blockchain_property_id)
+  if (!property?.id) {
     return null
   }
 
@@ -71,6 +75,11 @@ const BlockchainOwnershipHistory = ({ property, className = '' }) => {
     )
   }
 
+  const truncateAddress = (addr) => {
+    if (!addr || addr.length < 10) return addr || '—'
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`
+  }
+
   return (
     <div className={className}>
       <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -94,24 +103,38 @@ const BlockchainOwnershipHistory = ({ property, className = '' }) => {
               <div>
                 <span className="text-gray-600">From: </span>
                 <span className="font-mono text-xs text-gray-800">
-                  {entry.previousOwner.slice(0, 6)}...{entry.previousOwner.slice(-4)}
+                  {truncateAddress(entry.previousOwner)}
                 </span>
               </div>
               <div>
                 <span className="text-gray-600">To: </span>
                 <span className="font-mono text-xs text-gray-800">
-                  {entry.newOwner.slice(0, 6)}...{entry.newOwner.slice(-4)}
+                  {truncateAddress(entry.newOwner)}
                 </span>
               </div>
             </div>
-            <a
-              href={`https://stellar.expert/explorer/testnet/account/${entry.previousOwner}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-blue-600 hover:text-blue-800 underline mt-2 inline-block"
-            >
-              View on StellarExpert
-            </a>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {entry.blockchainTxHash && (
+                <a
+                  href={`https://stellar.expert/explorer/testnet/tx/${entry.blockchainTxHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:text-blue-800 underline"
+                >
+                  Escrow Tx ↗
+                </a>
+              )}
+              {entry.nftTransferTxHash && (
+                <a
+                  href={`https://stellar.expert/explorer/testnet/tx/${entry.nftTransferTxHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:text-blue-800 underline"
+                >
+                  NFT Deed Tx ↗
+                </a>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -124,6 +147,7 @@ const BlockchainOwnershipHistory = ({ property, className = '' }) => {
 
 BlockchainOwnershipHistory.propTypes = {
   property: PropTypes.shape({
+    id: PropTypes.string,
     blockchain_property_id: PropTypes.string,
   }),
   className: PropTypes.string,

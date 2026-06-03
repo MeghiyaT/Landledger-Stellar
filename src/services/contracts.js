@@ -602,4 +602,44 @@ export const hasPropertyNFT = async (propertyId) => {
 // Simple legacy placeholders for parts of the UI not yet fully migrated
 export const getPropertyOnChain = async () => ({})
 export const getPropertyTokenBalance = async () => '0'
-export const getPropertyOwnershipHistory = async () => []
+
+/**
+ * Fetch ownership transfer history for a property from Supabase.
+ * Returns an array of transfer records ordered oldest-first.
+ *
+ * @param {string} propertyId - The property UUID (not the on-chain ID)
+ */
+export const getPropertyOwnershipHistory = async (propertyId) => {
+  try {
+    const { supabase } = await import('../lib/supabase')
+
+    const { data, error } = await supabase
+      .from('ownership_transfers')
+      .select('*')
+      .eq('property_id', propertyId)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      // Table may not exist yet (migration not run) — degrade gracefully
+      if (error.code === '42P01' || error.message?.includes('ownership_transfers')) {
+        console.warn('[contracts] ownership_transfers table not found — returning empty history')
+        return []
+      }
+      throw error
+    }
+
+    return (data || []).map((entry) => ({
+      id: entry.id,
+      previousOwner: entry.from_wallet || entry.from_owner_id || 'Genesis',
+      newOwner: entry.to_wallet || entry.to_owner_id,
+      timestamp: entry.created_at,
+      transferType: entry.transfer_type === 'mint' ? 'Initial Registration' : 'Sale',
+      blockchainTxHash: entry.blockchain_tx_hash,
+      nftTransferTxHash: entry.nft_transfer_tx_hash,
+      transactionId: entry.transaction_id,
+    }))
+  } catch (err) {
+    console.error('Error fetching ownership history:', err)
+    return []
+  }
+}
