@@ -104,3 +104,77 @@ export const uploadPropertyToIPFS = async (_imageFiles, propertyMetadata, proper
     metadataIpfsUrl: metadataResult.ipfsUrl,
   }
 }
+
+/**
+ * Fetch existing IPFS metadata JSON by CID.
+ *
+ * @param {string} cid - The IPFS CID to fetch
+ * @returns {object|null} The parsed metadata JSON, or null on failure
+ */
+export const fetchIPFSMetadata = async (cid) => {
+  if (!cid) return null
+
+  try {
+    const url = getIPFSGatewayUrl(cid)
+    const response = await fetch(url)
+    if (!response.ok) {
+      console.warn(`[IPFS] Failed to fetch metadata for CID ${cid}: ${response.status}`)
+      return null
+    }
+    return await response.json()
+  } catch (err) {
+    console.warn(`[IPFS] Error fetching metadata for CID ${cid}:`, err.message)
+    return null
+  }
+}
+
+/**
+ * Update property IPFS metadata by fetching the current pin, merging updates,
+ * and re-pinning to Pinata. Returns the new CID and URLs.
+ *
+ * This is a best-effort operation — callers should not block on failure.
+ *
+ * @param {string} currentCid - The current IPFS metadata CID
+ * @param {object} updates    - Fields to merge into the existing metadata
+ * @param {string} propertyId - The property UUID (for pin naming)
+ * @returns {{ cid: string, gatewayUrl: string, ipfsUrl: string } | null}
+ */
+export const updatePropertyIPFSMetadata = async (currentCid, updates, propertyId) => {
+  try {
+    // 1. Fetch existing metadata
+    const existingMetadata = await fetchIPFSMetadata(currentCid)
+    if (!existingMetadata) {
+      console.warn('[IPFS] Could not fetch existing metadata — uploading updates as fresh metadata')
+    }
+
+    // 2. Merge updates into existing metadata
+    const updatedMetadata = {
+      ...(existingMetadata || {}),
+      ...updates,
+      updatedAt: new Date().toISOString(),
+      previousCid: currentCid, // Keep a reference to the old CID for auditability
+    }
+
+    // 3. Re-pin to Pinata
+    const folderName = propertyId ? `property-${propertyId}` : `property-${Date.now()}`
+    const result = await uploadMetadataToIPFS(updatedMetadata, {
+      name: `${folderName}/metadata.json`,
+      keyvalues: {
+        propertyId: propertyId || 'unknown',
+        type: 'property-metadata',
+        previousCid: currentCid || '',
+      },
+    })
+
+    console.log(`[IPFS] Metadata re-pinned for property ${propertyId}: ${currentCid} → ${result.cid}`)
+
+    return {
+      cid: result.cid,
+      gatewayUrl: result.gatewayUrl,
+      ipfsUrl: result.ipfsUrl,
+    }
+  } catch (err) {
+    console.error('[IPFS] Failed to update property metadata:', err.message)
+    return null
+  }
+}

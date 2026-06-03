@@ -724,7 +724,14 @@ const SellProperty = () => {
               ? formData.ownershipHistory.filter(r => r.owner_name.trim()) // Only include records with owner names
               : []),
         user_id: user.id,
-        status: 'active', // Ensure property has active status to show in listings
+        // Preserve 'sold' status for purchased properties — only new/relisted properties should be 'active'
+        status: (isPurchasedProperty && originalProperty?.status === 'sold') ? 'sold' : 'active',
+      }
+
+      // Preserve sold_to and sold_at for purchased properties so they remain visible in the buyer's dashboard
+      if (isPurchasedProperty && originalProperty) {
+        if (originalProperty.sold_to) propertyData.sold_to = originalProperty.sold_to
+        if (originalProperty.sold_at) propertyData.sold_at = originalProperty.sold_at
       }
       
       // Only include price if listing type is set or if editing purchased property (preserve original price)
@@ -818,6 +825,28 @@ const SellProperty = () => {
       let ipfsImageCids = []
       let ipfsError = null
 
+      // For purchased properties, fetch the actual ownership transfer history
+      // so IPFS metadata reflects the real on-chain ownership records.
+      let ipfsOwnershipHistory = formData.ownershipHistory || []
+      if (isPurchasedProperty && editId) {
+        try {
+          const { getPropertyOwnershipHistory } = await import('../services/contracts')
+          const transfers = await getPropertyOwnershipHistory(editId)
+          if (transfers && transfers.length > 0) {
+            ipfsOwnershipHistory = transfers.map(t => ({
+              from: t.previousOwner || 'Unknown',
+              to: t.newOwner || 'Unknown',
+              transferType: t.transferType || 'sale',
+              date: t.timestamp || new Date().toISOString(),
+              escrowTxHash: t.blockchainTxHash || null,
+              nftTransferTxHash: t.nftTransferTxHash || null,
+            }))
+          }
+        } catch (historyErr) {
+          console.warn('Could not fetch ownership history for IPFS metadata:', historyErr?.message)
+        }
+      }
+
       const baseMetadata = {
         title: formData.title,
         location: formData.location,
@@ -831,7 +860,9 @@ const SellProperty = () => {
         features: formData.features ? formData.features.split(',').map(f => f.trim()).filter(Boolean) : [],
         price: formData.price ? parseFloat(formData.price) : null,
         listingType: formData.listingType,
-        ownershipHistory: formData.ownershipHistory,
+        // For purchased properties, include the sold status so IPFS reflects the true state
+        status: (isPurchasedProperty && originalProperty?.status === 'sold') ? 'sold' : 'active',
+        ownershipHistory: ipfsOwnershipHistory,
         blockchainPropertyId: blockchainPropertyId || null,
         blockchainTxHash: blockchainTxHash || null,
       }
