@@ -1984,15 +1984,8 @@ const Dashboard = () => {
                                 VIEW PROOF
                               </a>
                             </div>
-                          ) : registration.status === 'approved' ? (
-                            // Approved but tx hash not yet saved — minting was triggered automatically,
-                            // show a pending indicator instead of the manual mint button
-                            <div className="bg-amber-50/40 p-3 rounded-lg border border-amber-100/50 flex items-center gap-2">
-                              <div className="w-4 h-4 rounded-full border-2 border-amber-400 border-t-transparent animate-spin" />
-                              <span className="text-[10px] font-bold text-amber-700 tracking-tighter">ANCHORING ON-CHAIN…</span>
-                            </div>
                           ) : (
-                            // Not yet approved — manual mint as a last resort (should rarely appear)
+                            // Not yet approved or missing NFT — manual mint as a fallback
                             <Button
                               variant="secondary"
                               size="sm"
