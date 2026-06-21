@@ -7,7 +7,7 @@ module.exports = {
     'plugin:react/jsx-runtime',    // disables 'React must be in scope' for new JSX transform
     'plugin:react-hooks/recommended',
   ],
-  ignorePatterns: ['dist', '.eslintrc.cjs', 'node_modules'],
+  ignorePatterns: ['dist', '.eslintrc.cjs', 'node_modules', 'hardhat.config.js', 'hardhat.config.cjs'],
   parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
   settings: { react: { version: '18.3' } },
   plugins: ['react-refresh'],
