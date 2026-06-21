@@ -783,6 +783,94 @@ const Dashboard = () => {
     await performTransactionUpdate(transactionId, newStatus)
   }
 
+  const handleSellerApproveEscrow = async (transaction) => {
+    if (!user?.id || !walletAddress) {
+      error('Please connect your wallet first.')
+      return
+    }
+    setProcessingTxId(transaction.id)
+    try {
+      const { supabase } = await import('../lib/supabase')
+      const { data: propData } = await supabase
+        .from('properties')
+        .select('blockchain_property_id, nft_token_id')
+        .eq('id', transaction.property_id)
+        .single()
+
+      if (!propData?.blockchain_property_id) throw new Error('Missing on-chain property ID.')
+
+      // We need the buyer wallet to pre-approve the NFT deed transfer.
+      let buyerWallet = transaction.metadata?.buyer_wallet
+      if (propData?.nft_token_id && !buyerWallet) {
+        const { data: wallets, error: walletError } = await getWalletAddresses([transaction.metadata?.buyer_id])
+        if (!walletError && wallets) {
+          buyerWallet = wallets[transaction.metadata?.buyer_id]
+        }
+        if (!buyerWallet) throw new Error('Buyer wallet not found for NFT deed approval.')
+      }
+
+      setOfferSigningModal(prev => ({
+        ...prev,
+        open: true,
+        step: 'signing',
+        pendingArgs: null, // We don't need pendingArgs here since we do it inline
+      }))
+
+      const approveProgress = ({ step, total, label }) =>
+        setOfferSigningModal(prev => ({ ...prev, step: 'signing', signingStep: step, signingTotal: total, signingLabel: label }))
+
+      const batchResult = await approveEscrowAndNFT(
+        propData.blockchain_property_id,
+        propData.nft_token_id || null,
+        buyerWallet,
+        null,
+        approveProgress
+      )
+
+      setOfferSigningModal(prev => ({ ...prev, step: 'confirming' }))
+
+      const updatedMetadata = {
+        ...(transaction.metadata || {}),
+        escrow_ready: true,
+        escrow_approval_tx_hash: batchResult.escrowApprovalHash,
+        nft_approval_tx_hash: batchResult.nftApprovalHash,
+      }
+
+      // Update both buyer and seller transactions that share this offer_id
+      if (transaction.metadata?.offer_id) {
+        // Find the partner transaction in state to update both
+        const allTxsForOffer = transactions.filter(t => t.metadata?.offer_id === transaction.metadata.offer_id)
+        for (const tx of allTxsForOffer) {
+           await supabase
+            .from('transactions')
+            .update({
+              metadata: {
+                ...tx.metadata,
+                escrow_ready: true,
+                escrow_approval_tx_hash: batchResult.escrowApprovalHash,
+                nft_approval_tx_hash: batchResult.nftApprovalHash,
+              },
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', tx.id)
+        }
+      } else {
+        await supabase
+          .from('transactions')
+          .update({ metadata: updatedMetadata, updated_at: new Date().toISOString() })
+          .eq('id', transaction.id)
+      }
+
+      setOfferSigningModal(prev => ({ ...prev, step: 'success', txHash: batchResult.hash }))
+      await loadData()
+    } catch (err) {
+      console.error('Retry escrow approval failed:', err)
+      setOfferSigningModal(prev => ({ ...prev, step: 'error', errorMsg: err.message || 'On-chain approval failed.' }))
+    } finally {
+      setProcessingTxId(null)
+    }
+  }
+
   const executeCompleteTransaction = async () => {
     const { transactionId, transaction } = completeSigningModal.pendingArgs
     setCompleteSigningModal(prev => ({ ...prev, step: 'signing' }))
@@ -2823,12 +2911,22 @@ const Dashboard = () => {
                       {/* ── Action buttons ── */}
                       {!isBlockchainOnly && isPending && (
                         <div className="flex gap-2 px-5 pb-5">
-                          {isBuyer ? (
+                          {!transaction.metadata?.escrow_ready && !isBuyer ? (
+                            <Button
+                              variant="primary" size="sm"
+                              onClick={() => handleSellerApproveEscrow(transaction)}
+                              disabled={isProcessing}
+                              className="flex-1"
+                            >
+                              {isProcessing ? <span className="flex items-center gap-2 justify-center"><Spinner /> Processing…</span> : 'Approve Escrow Transfer'}
+                            </Button>
+                          ) : isBuyer ? (
                             <Button
                               variant="primary" size="sm"
                               onClick={() => handleCreateEscrowAndPay(transaction)}
-                              disabled={isProcessing}
+                              disabled={isProcessing || !transaction.metadata?.escrow_ready}
                               className="flex-1"
+                              title={!transaction.metadata?.escrow_ready ? 'Waiting for seller to approve the escrow on-chain' : ''}
                             >
                               {isProcessing ? <span className="flex items-center gap-2 justify-center"><Spinner /> Processing…</span> : 'Pay with XLM'}
                             </Button>
