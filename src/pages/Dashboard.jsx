@@ -11,7 +11,7 @@ import { getOffersBySellerId, getOffersByBuyerId, updateOfferStatus, acceptOffer
 import { createEscrowTransaction } from '../services/escrow'
 import { getNotifications, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, deleteOldNotifications } from '../services/notifications'
 import { downloadRegistrationCertificate } from '../utils/pdfGenerator'
-import { registerPropertyOnChain, approveEscrowForProperty, approvePropertyNFTTransfer } from '../services/contracts'
+import { registerPropertyOnChain, approveEscrowAndNFT, approvePropertyNFTTransfer } from '../services/contracts'
 import { updateRegistrationBlockchainData } from '../services/registrations'
 import useWallet from '../hooks/useWallet'
 import Container from '../components/layout/Container'
@@ -26,6 +26,7 @@ import Select from '../components/ui/Select'
 import Textarea from '../components/ui/Textarea'
 import { useToast } from '../hooks/useToast'
 import Modal from '../components/ui/Modal'
+import SigningProgressModal from '../components/ui/SigningProgressModal'
 import { PROPERTY_PLACEHOLDER, getSafeImageUrl } from '../utils/placeholders'
 import TokenBalance from '../components/TokenBalance'
 import BlockchainBadge from '../components/BlockchainBadge'
@@ -73,29 +74,29 @@ const Dashboard = () => {
   const [anchoringModal, setAnchoringModal] = useState({ open: false, registration: null, step: 'idle', error: null, txHash: null })
   const [processingTxId, setProcessingTxId] = useState(null)
 
+  // Signing progress modals for offer-accept, escrow-create, and escrow-complete flows
+  const SIGNING_MODAL_INITIAL = { open: false, step: 'preview', txHash: null, errorMsg: null, pendingArgs: null }
+  const [offerSigningModal, setOfferSigningModal] = useState(SIGNING_MODAL_INITIAL)
+  const [escrowSigningModal, setEscrowSigningModal] = useState(SIGNING_MODAL_INITIAL)
+  const [completeSigningModal, setCompleteSigningModal] = useState(SIGNING_MODAL_INITIAL)
+
   const handleAnchoring = async () => {
     if (!anchoringModal.registration || !walletAddress) return;
 
     const reg = anchoringModal.registration;
-    setAnchoringModal(prev => ({ ...prev, step: 'preparing', error: null }));
+    setAnchoringModal(prev => ({ ...prev, step: 'signing', error: null }));
 
     try {
-      // Step 1: Preparing
-      await new Promise(resolve => setTimeout(resolve, 800));
-      setAnchoringModal(prev => ({ ...prev, step: 'signing' }));
-
-      // Step 2: Signing & Anchoring
       const result = await registerPropertyOnChain(reg.property_address, 'Verified Asset', 0);
 
       if (result.txHash) {
         setAnchoringModal(prev => ({ ...prev, step: 'verifying', txHash: result.txHash }));
 
-        // Step 3: Database Sync (non-fatal — blockchain tx is already committed)
+        // Database Sync (non-fatal — blockchain tx is already committed)
         try {
           const { error: dbError } = await updateRegistrationBlockchainData(reg.id, result.propertyId, result.txHash);
           if (dbError) {
             console.warn('DB sync warning (columns may be missing):', dbError.message);
-            // If columns are missing, log the hash so it's not lost
             console.log('📦 Blockchain TX Hash (save this):', result.txHash);
           }
         } catch (dbErr) {
@@ -103,13 +104,11 @@ const Dashboard = () => {
         }
 
         setAnchoringModal(prev => ({ ...prev, step: 'success' }));
-        success('Asset anchored on Stellar!');
         await loadData();
       }
     } catch (err) {
       console.error('Anchoring error:', err);
       setAnchoringModal(prev => ({ ...prev, step: 'error', error: err.message || 'Blockchain synchronization failed. Please ensure your Freighter wallet is on Testnet.' }));
-      error('Anchoring failed');
     }
   };
 
@@ -582,6 +581,7 @@ const Dashboard = () => {
         }
 
         // Pre-authorize the Escrow contract and buyer wallet to complete the on-chain deed transfer.
+        // Both approvals (registry + NFT) are batched into a SINGLE Freighter signature.
         if (walletAddress && data?.offer?.property_id) {
           try {
             const { supabase } = await import('../lib/supabase')
@@ -592,45 +592,45 @@ const Dashboard = () => {
               .single()
 
             const { data: wallets, error: walletError } = await getWalletAddresses([data.offer.buyer_id])
-            if (walletError) {
-              throw walletError
-            }
+            if (walletError) throw walletError
 
             const buyerWallet = wallets?.[data.offer.buyer_id] || null
-            const needsEscrowApproval = !!propData?.blockchain_property_id
-            const needsNftApproval = !!propData?.nft_token_id && !!buyerWallet
 
-            let escrowApprovalTxHash = null
-            let nftApprovalTxHash = null
-
-            if (needsEscrowApproval) {
-              success('Please sign one more transaction in Freighter to authorize the escrow for on-chain transfer...')
-              const escrowApproval = await approveEscrowForProperty(propData.blockchain_property_id)
-              escrowApprovalTxHash = escrowApproval?.hash || null
+            if (!propData?.blockchain_property_id) {
+              throw new Error('This property is missing its on-chain property ID.')
             }
-
             if (propData?.nft_token_id && !buyerWallet) {
               throw new Error('The buyer must connect a wallet before the NFT deed approval can be signed.')
             }
 
-            if (needsNftApproval) {
-              success('Please sign one more transaction in Freighter to authorize the NFT deed transfer...')
-              const nftApproval = await approvePropertyNFTTransfer(propData.nft_token_id, buyerWallet)
-              nftApprovalTxHash = nftApproval?.hash || null
-            }
+            // Open the signing modal — preview → signing → confirming → success/error
+            setOfferSigningModal(prev => ({
+              ...prev,
+              open: true,
+              step: 'signing',
+              pendingArgs: { propData, buyerWallet, data },
+            }))
+
+            // Single signature covers both the registry approve AND the NFT approve
+            const batchResult = await approveEscrowAndNFT(
+              propData.blockchain_property_id,
+              propData.nft_token_id || null,
+              buyerWallet
+            )
+
+            setOfferSigningModal(prev => ({ ...prev, step: 'confirming' }))
 
             const buyerTxMetadata = {
               ...(data.buyerTransaction?.metadata || {}),
               escrow_ready: true,
-              escrow_approval_tx_hash: escrowApprovalTxHash,
-              nft_approval_tx_hash: nftApprovalTxHash,
+              escrow_approval_tx_hash: batchResult.escrowApprovalHash,
+              nft_approval_tx_hash: batchResult.nftApprovalHash,
             }
-
             const sellerTxMetadata = {
               ...(data.sellerTransaction?.metadata || {}),
               escrow_ready: true,
-              escrow_approval_tx_hash: escrowApprovalTxHash,
-              nft_approval_tx_hash: nftApprovalTxHash,
+              escrow_approval_tx_hash: batchResult.escrowApprovalHash,
+              nft_approval_tx_hash: batchResult.nftApprovalHash,
             }
 
             if (data.buyerTransaction?.id) {
@@ -639,16 +639,17 @@ const Dashboard = () => {
                 .update({ metadata: buyerTxMetadata, updated_at: new Date().toISOString() })
                 .eq('id', data.buyerTransaction.id)
             }
-
             if (data.sellerTransaction?.id) {
               await supabase
                 .from('transactions')
                 .update({ metadata: sellerTxMetadata, updated_at: new Date().toISOString() })
                 .eq('id', data.sellerTransaction.id)
             }
+
+            setOfferSigningModal(prev => ({ ...prev, step: 'success', txHash: batchResult.hash }))
           } catch (approveErr) {
             console.error('Could not complete the required on-chain approvals:', approveErr)
-            error(`Offer accepted, but escrow is blocked until the seller signs the required approvals: ${approveErr.message || 'Approval failed.'}`)
+            setOfferSigningModal(prev => ({ ...prev, step: 'error', errorMsg: approveErr.message || 'On-chain approval failed. Please try again.' }))
           }
         }
         // Reload all data including transactions with a small delay to ensure DB has updated
@@ -689,13 +690,26 @@ const Dashboard = () => {
     if (transaction?.metadata?.escrow_ready === false) {
       console.warn('escrow_ready is false — proceeding anyway as the on-chain approval may already exist from a prior acceptance.')
     }
+
+    const isINR = transaction.currency === 'INR' || !transaction.currency
+    const amountInXlm = isINR ? fiatToTokens(transaction.amount, 'INR') : transaction.amount
+
+    // Show preview modal, then wait for user to click "Sign in Freighter"
+    setEscrowSigningModal(prev => ({
+      ...prev,
+      open: true,
+      step: 'preview',
+      txHash: null,
+      errorMsg: null,
+      pendingArgs: { transaction, amountInXlm },
+    }))
+  }
+
+  const executeCreateEscrow = async () => {
+    const { transaction, amountInXlm } = escrowSigningModal.pendingArgs
+    setEscrowSigningModal(prev => ({ ...prev, step: 'signing' }))
     setProcessingTxId(transaction.id)
     try {
-      success('Initiating escrow transaction in Freighter...')
-
-      const isINR = transaction.currency === 'INR' || !transaction.currency;
-      const amountInXlm = isINR ? fiatToTokens(transaction.amount, 'INR') : transaction.amount;
-
       const response = await createEscrowTransaction(
         transaction.property_id,
         transaction.metadata?.seller_id,
@@ -706,22 +720,22 @@ const Dashboard = () => {
       )
 
       if (response.error) {
-        // If txHash is present on the error, the on-chain payment succeeded but the DB update
-        // failed (e.g. RLS). Show a warning (not an error) so the user knows funds moved.
         if (response.error.txHash) {
-          error(`⚠️ ${response.error.message}`)
+          // On-chain succeeded but DB update failed — surface as warning
+          setEscrowSigningModal(prev => ({ ...prev, step: 'error', errorMsg: `⚠️ ${response.error.message}` }))
         } else {
-          error(`Failed to lock funds: ${response.error.message}`)
+          setEscrowSigningModal(prev => ({ ...prev, step: 'error', errorMsg: response.error.message }))
         }
-        await loadData() // Reload in case partial state was saved
+        await loadData()
         return
       }
 
-      success('Funds successfully locked in escrow! The transaction is now in progress.')
+      setEscrowSigningModal(prev => ({ ...prev, step: 'confirming' }))
       await loadData()
+      setEscrowSigningModal(prev => ({ ...prev, step: 'success', txHash: response.data?.hash || null }))
     } catch (err) {
       console.error('Error creating escrow:', err)
-      error('An error occurred during payment.')
+      setEscrowSigningModal(prev => ({ ...prev, step: 'error', errorMsg: err.message || 'An error occurred during payment.' }))
     } finally {
       setProcessingTxId(null)
     }
@@ -761,7 +775,40 @@ const Dashboard = () => {
     await performTransactionUpdate(transactionId, newStatus)
   }
 
+  const executeCompleteTransaction = async () => {
+    const { transactionId } = completeSigningModal.pendingArgs
+    setCompleteSigningModal(prev => ({ ...prev, step: 'signing' }))
+    try {
+      const { error: updateError } = await updateTransactionStatus(transactionId, 'completed', user.id)
+      if (updateError) {
+        setCompleteSigningModal(prev => ({ ...prev, step: 'error', errorMsg: updateError.message || 'Please try again.' }))
+        return
+      }
+      setCompleteSigningModal(prev => ({ ...prev, step: 'confirming' }))
+      await loadData()
+      setCompleteSigningModal(prev => ({ ...prev, step: 'success' }))
+    } catch (err) {
+      setCompleteSigningModal(prev => ({ ...prev, step: 'error', errorMsg: err.message || 'An error occurred.' }))
+    }
+  }
+
   const performTransactionUpdate = async (transactionId, newStatus) => {
+    // 'completed' XLM escrow purchases get the rich signing modal
+    if (newStatus === 'completed') {
+      const transaction = transactions.find(t => t.id === transactionId)
+      if (transaction?.metadata?.escrow_transaction_id || transaction?.currency === 'XLM') {
+        setCompleteSigningModal(prev => ({
+          ...prev,
+          open: true,
+          step: 'preview',
+          txHash: null,
+          errorMsg: null,
+          pendingArgs: { transactionId, transaction },
+        }))
+        return
+      }
+    }
+
     try {
       const { error: updateError } = await updateTransactionStatus(transactionId, newStatus, user.id)
       if (updateError) {
@@ -3579,7 +3626,91 @@ const Dashboard = () => {
           </div>
         </Modal>
       </Container>
+
+      {/* ── Seller: Accept Offer – approve escrow + NFT deed (Step 2 of 4) ── */}
+      <SigningProgressModal
+        isOpen={offerSigningModal.open}
+        onClose={() => setOfferSigningModal(prev => ({ ...prev, open: false }))}
+        onConfirm={() => {}} // signing starts automatically on offer accept; modal shows progress only
+        step={offerSigningModal.step}
+        stepLabel="Step 2 of 4 · Seller"
+        title="Authorize Escrow & Deed Transfer"
+        description="You're accepting a buyer's offer. One signature will authorize the escrow contract to manage the fund release and approve the NFT deed transfer to the buyer."
+        actions={[
+          {
+            icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>,
+            label: 'Registry Approval',
+            detail: 'Grants the escrow contract authority to transfer property ownership on completion.',
+          },
+          {
+            icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-5 5a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 10V5a2 2 0 012-2z" /></svg>,
+            label: 'NFT Deed Approval',
+            detail: "Pre-approves the buyer's wallet to receive the property NFT deed on purchase completion.",
+          },
+        ]}
+        successTitle="Approvals Confirmed!"
+        successMsg="Escrow and NFT deed approvals are now recorded on the Stellar ledger. The buyer can proceed to lock funds."
+        txHash={offerSigningModal.txHash}
+        errorMsg={offerSigningModal.errorMsg}
+        confirmText="Sign in Freighter"
+      />
+
+      {/* ── Buyer: Lock Funds – create XLM escrow (Step 3 of 4) ── */}
+      <SigningProgressModal
+        isOpen={escrowSigningModal.open}
+        onClose={() => setEscrowSigningModal(prev => ({ ...prev, open: false }))}
+        onConfirm={executeCreateEscrow}
+        step={escrowSigningModal.step}
+        stepLabel="Step 3 of 4 · Buyer"
+        title="Lock Funds in Escrow"
+        description={escrowSigningModal.pendingArgs
+          ? `You're about to lock ${parseFloat(escrowSigningModal.pendingArgs.amountInXlm).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM into a smart contract. Funds are held securely until you confirm the purchase.`
+          : 'Lock your XLM funds in the escrow smart contract.'}
+        actions={[
+          {
+            icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>,
+            label: 'Lock XLM in Escrow',
+            detail: 'Funds move to the escrow smart contract — only released when you confirm, or refunded if cancelled.',
+          },
+        ]}
+        successTitle="Funds Locked!"
+        successMsg="Your XLM is now held securely in the escrow contract. Once you're ready, confirm the purchase to release funds and transfer the deed."
+        txHash={escrowSigningModal.txHash}
+        errorMsg={escrowSigningModal.errorMsg}
+        confirmText="Lock Funds in Freighter"
+      />
+
+      {/* ── Buyer: Complete Purchase – release funds + deed transfer (Step 4 of 4) ── */}
+      <SigningProgressModal
+        isOpen={completeSigningModal.open}
+        onClose={() => setCompleteSigningModal(prev => ({ ...prev, open: false }))}
+        onConfirm={executeCompleteTransaction}
+        step={completeSigningModal.step}
+        stepLabel="Step 4 of 4 · Buyer"
+        title="Complete Purchase"
+        description={completeSigningModal.pendingArgs?.transaction
+          ? `This is the final step. Signing this transaction will release ${parseFloat(completeSigningModal.pendingArgs.transaction.amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM to the seller and transfer the property deed to you.`
+          : 'Release escrow funds and receive the property deed.'}
+        actions={[
+          {
+            icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>,
+            label: 'Release XLM to Seller',
+            detail: 'Escrow is completed on-chain — funds are sent to the seller immediately.',
+          },
+          {
+            icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-5 5a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 10V5a2 2 0 012-2z" /></svg>,
+            label: 'Transfer Property NFT Deed',
+            detail: 'The property NFT is transferred to your wallet — you become the on-chain owner.',
+          },
+        ]}
+        successTitle="Purchase Complete!"
+        successMsg="Congratulations! The funds have been released and the property NFT deed is now in your wallet."
+        txHash={completeSigningModal.txHash}
+        errorMsg={completeSigningModal.errorMsg}
+        confirmText="Complete in Freighter"
+      />
     </Section>
+
   )
 }
 

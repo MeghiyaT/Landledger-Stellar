@@ -373,6 +373,127 @@ const invokeSoroban = async (contractId, method, args = []) => {
   throw lastError || new Error(`All ${MAX_SUBMIT_RETRIES} attempts failed for ${method}`)
 }
 
+/**
+ * Invoke multiple Soroban contract calls in a single transaction (one Freighter signature).
+ *
+ * Stellar supports multiple InvokeHostFunction operations per transaction. We build them
+ * all into one envelope, simulate the whole thing together so the RPC can compute a
+ * unified footprint and resource budget, then prepareTransaction injects the auth entries
+ * for every operation at once.  The user signs exactly once.
+ *
+ * @param {Array<{contractId: string, method: string, args: any[]}>} calls
+ * @returns {Promise<{ hash: string, returnValues: any[] }>}
+ */
+const invokeSorobanBatch = async (calls) => {
+  if (!calls || calls.length === 0) {
+    throw new Error('invokeSorobanBatch requires at least one call')
+  }
+
+  const { address } = await getAddress()
+  const server = new rpc.Server(RPC_URL)
+  const fee = await getDynamicFee()
+
+  let lastError = null
+
+  for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`[Soroban:batch] Retry attempt ${attempt}/${MAX_SUBMIT_RETRIES}`)
+        await sleep(2000)
+      }
+
+      // Re-fetch account on each attempt to get a fresh sequence number
+      const account = await server.getAccount(address)
+
+      // 1. Build a single transaction with all operations
+      const builder = new TransactionBuilder(account, {
+        fee,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      }).setTimeout(TX_TIMEOUT_SECONDS)
+
+      for (const { contractId, method, args = [] } of calls) {
+        const contract = new Contract(contractId)
+        builder.addOperation(contract.call(method, ...args))
+      }
+
+      const txInitial = builder.build()
+
+      // 2. Simulate the combined transaction — RPC handles all ops together
+      const simulation = await server.simulateTransaction(txInitial)
+      if (rpc.Api.isSimulationError(simulation)) {
+        throw new Error(`Batch simulation failed: ${simulation.error}`)
+      }
+
+      // 3. Prepare transaction — injects auth + resource fees for all operations
+      const tx = await server.prepareTransaction(txInitial)
+
+      // 4. Sign once via Freighter
+      const xdrString = tx.toXDR()
+      const methodLabels = calls.map(c => c.method).join(' + ')
+      console.log(
+        `[Soroban:batch] Sending ${calls.length} ops to Freighter (attempt ${attempt}, fee=${fee}): ${methodLabels}`
+      )
+
+      const response = await signTransaction(xdrString, {
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+
+      console.log('[Soroban:batch] Freighter response:', response)
+
+      if (response.error) {
+        throw new Error(`Freighter error: ${JSON.stringify(response.error)}`)
+      }
+
+      const signedXdr = response.signedTxXdr
+      if (!signedXdr) {
+        throw new Error('Freighter returned empty signedTxXdr. User may have rejected the request.')
+      }
+
+      // 5. Submit signed transaction
+      const txToSubmit = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE)
+      const result = await server.sendTransaction(txToSubmit)
+      console.log(`[Soroban:batch] Transaction submitted (attempt ${attempt}):`, result.hash, result.status)
+
+      if (result.status === 'ERROR') {
+        const errorMsg = result.errorResult
+          ? `Submission error: ${JSON.stringify(result.errorResult)}`
+          : `Soroban batch transaction submission failed`
+        console.warn(`[Soroban:batch] ${errorMsg}`)
+        lastError = new Error(errorMsg)
+        continue
+      }
+
+      // 6. Poll for confirmation (use the first method name for diagnostic event lookup)
+      const finalResult = await waitForSorobanTransaction(server, result.hash, calls[0].method, null)
+      return {
+        hash: finalResult.hash,
+        returnValues: [finalResult.returnValue],
+      }
+    } catch (err) {
+      lastError = err
+
+      const noRetryPatterns = [
+        'Freighter error',
+        'Freighter returned empty',
+        'User may have rejected',
+        'Batch simulation failed',
+        'failed on-chain',
+      ]
+      if (noRetryPatterns.some(p => err.message?.includes(p))) {
+        throw err
+      }
+
+      console.warn(`[Soroban:batch] Attempt ${attempt}/${MAX_SUBMIT_RETRIES} failed:`, err.message)
+
+      if (attempt === MAX_SUBMIT_RETRIES) {
+        break
+      }
+    }
+  }
+
+  throw lastError || new Error(`All ${MAX_SUBMIT_RETRIES} batch attempts failed`)
+}
+
 // --- PropertyRegistry Service ---
 
 export const registerPropertyOnChain = async (title, location, price) => {
@@ -514,6 +635,73 @@ export const approvePropertyNFTTransfer = async (tokenId, approvedAddress, liveU
   ])
 }
 
+/**
+ * Batch: Approve escrow for property transfer AND approve NFT deed transfer in one signature.
+ * Replaces the two consecutive Freighter popups a seller gets when accepting a buyer's offer.
+ *
+ * @param {string|number} propertyId        - On-chain property ID (u32)
+ * @param {string|number} nftTokenId        - NFT token ID (u32), or null if no NFT exists yet
+ * @param {string}        buyerWallet        - Buyer's Stellar public key
+ * @param {number|null}   liveUntilLedger   - Optional ledger expiry for NFT approval
+ * @returns {Promise<{ hash: string, escrowApprovalHash: string, nftApprovalHash: string }>}
+ */
+export const approveEscrowAndNFT = async (propertyId, nftTokenId, buyerWallet, liveUntilLedger = null) => {
+  const { PropertyRegistry, Escrow, PropertyNFT } = getContractAddresses()
+  const safePropertyId = parseRequiredU32(propertyId, 'Property ID')
+
+  const calls = []
+
+  // Always add the registry approve call
+  calls.push({
+    contractId: PropertyRegistry,
+    method: 'approve',
+    args: [
+      nativeToScVal(safePropertyId, { type: 'u32' }),
+      nativeToScVal(Escrow, { type: 'address' }),
+    ],
+  })
+
+  // Only add NFT approve if token exists and buyer wallet is known
+  if (nftTokenId && buyerWallet) {
+    const { address } = await getAddress()
+    const server = new rpc.Server(RPC_URL)
+    const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
+
+    let ledgerExpiry = liveUntilLedger
+    if (!ledgerExpiry) {
+      const latestLedger = await server.getLatestLedger()
+      ledgerExpiry = latestLedger.sequence + DEFAULT_NFT_APPROVAL_LEDGER_BUFFER
+    }
+
+    calls.push({
+      contractId: PropertyNFT,
+      method: 'approve',
+      args: [
+        nativeToScVal(address, { type: 'address' }),
+        nativeToScVal(buyerWallet, { type: 'address' }),
+        nativeToScVal(parsedTokenId, { type: 'u32' }),
+        nativeToScVal(ledgerExpiry, { type: 'u32' }),
+      ],
+    })
+  }
+
+  if (calls.length === 1) {
+    // Only registry approve needed — use single invokeSoroban path (no NFT yet)
+    console.log('[Soroban] No NFT token yet — only approving escrow (single op)')
+    const result = await invokeSoroban(PropertyRegistry, 'approve', calls[0].args)
+    return { hash: result.hash, escrowApprovalHash: result.hash, nftApprovalHash: null }
+  }
+
+  // Both calls present — batch them into one signature
+  console.log('[Soroban:batch] Batching escrow approve + NFT approve into single signature')
+  const result = await invokeSorobanBatch(calls)
+  return {
+    hash: result.hash,
+    escrowApprovalHash: result.hash,
+    nftApprovalHash: result.hash,
+  }
+}
+
 export const transferPropertyNFT = async (tokenId, fromAddress, toAddress) => {
   const { PropertyNFT } = getContractAddresses()
   const { address } = await getAddress()
@@ -526,6 +714,72 @@ export const transferPropertyNFT = async (tokenId, fromAddress, toAddress) => {
     nativeToScVal(toAddress, { type: 'address' }),
     nativeToScVal(parsedTokenId, { type: 'u32' }),
   ])
+}
+
+/**
+ * Batch: Complete the escrow on-chain AND transfer the NFT deed to the buyer in one signature.
+ * Replaces the two consecutive Freighter popups a buyer gets when finalising their purchase.
+ * The caller (buyer) address is resolved internally from Freighter.
+ *
+ * @param {string|number} escrowTransactionId - On-chain escrow ID (u32)
+ * @param {string|number} nftTokenId           - NFT token ID (u32), or null to skip NFT transfer
+ * @param {string}        sellerWallet          - Seller's Stellar public key
+ * @param {string}        buyerWallet           - Buyer's Stellar public key
+ * @returns {Promise<{ hash: string, escrowHash: string, nftHash: string|null }>}
+ */
+export const completeEscrowAndTransferNFT = async (
+  escrowTransactionId,
+  nftTokenId,
+  sellerWallet,
+  buyerWallet
+) => {
+  const { Escrow, PropertyNFT } = getContractAddresses()
+  const safeTxId = parseRequiredU32(escrowTransactionId, 'Escrow transaction ID')
+
+  // Resolve the connected wallet as the caller (buyer completing the purchase)
+  const { address: callerAddress } = await getAddress()
+
+  const calls = [
+    {
+      contractId: Escrow,
+      method: 'complete_escrow',
+      args: [
+        nativeToScVal(safeTxId, { type: 'u32' }),
+        nativeToScVal(callerAddress, { type: 'address' }),
+      ],
+    },
+  ]
+
+  // Add NFT transfer only when there is a token to transfer
+  if (nftTokenId && sellerWallet && buyerWallet) {
+    const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
+    calls.push({
+      contractId: PropertyNFT,
+      method: 'transfer_from',
+      args: [
+        nativeToScVal(callerAddress, { type: 'address' }), // spender (buyer as approved operator)
+        nativeToScVal(sellerWallet, { type: 'address' }),  // from
+        nativeToScVal(buyerWallet, { type: 'address' }),   // to
+        nativeToScVal(parsedTokenId, { type: 'u32' }),
+      ],
+    })
+  }
+
+  if (calls.length === 1) {
+    // No NFT — fall back to single invokeSoroban path
+    console.log('[Soroban] No NFT to transfer — only completing escrow (single op)')
+    const result = await invokeSoroban(Escrow, 'complete_escrow', calls[0].args)
+    return { hash: result.hash, escrowHash: result.hash, nftHash: null }
+  }
+
+  // Both calls — batch into one Freighter signature
+  console.log('[Soroban:batch] Batching complete_escrow + NFT transfer_from into single signature')
+  const result = await invokeSorobanBatch(calls)
+  return {
+    hash: result.hash,
+    escrowHash: result.hash,
+    nftHash: result.hash,
+  }
 }
 
 

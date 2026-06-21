@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import { completeEscrowOnChain, cancelEscrowOnChain, transferPropertyNFT } from './contracts'
+import { completeEscrowOnChain, cancelEscrowOnChain, transferPropertyNFT, completeEscrowAndTransferNFT } from './contracts'
 import * as StellarSdk from '@stellar/stellar-sdk'
 import { notifyPropertySold, notifyPropertyPurchased } from './notifications'
 import { getWalletAddresses } from './user'
@@ -67,11 +67,64 @@ export const updateTransactionStatus = async (transactionId, status, userId) => 
     return { data: null, error: { message: 'You can only update your own transactions' } }
   }
 
+  // nftTransferHash is populated inside the completed escrow batch block below.
+  // Declared here so all branches of the escrow try/catch can write to it.
+  let nftTransferHash = null
+
   // Trigger Soroban Escrow Completion or Cancellation if applicable
   if (transaction.metadata?.escrow_transaction_id) {
     try {
       if (status === 'completed') {
-        await completeEscrowOnChain(transaction.metadata.escrow_transaction_id)
+        // ------------------------------------------------------------------
+        // Resolve NFT details upfront so we can batch escrow + NFT transfer
+        // into ONE Freighter popup instead of two sequential ones.
+        // ------------------------------------------------------------------
+        let nftTokenId = null
+        let sellerWallet = transaction.metadata?.seller_wallet
+        let buyerWallet  = transaction.metadata?.buyer_wallet
+
+        if (transaction.property_id) {
+          const { data: propForBatch } = await supabase
+            .from('properties')
+            .select('nft_token_id, nft_transfer_tx_hash')
+            .eq('id', transaction.property_id)
+            .single()
+
+          // Only include the NFT op when there is a token that hasn't been transferred yet
+          if (propForBatch?.nft_token_id && !propForBatch?.nft_transfer_tx_hash) {
+            nftTokenId = propForBatch.nft_token_id
+
+            if (!sellerWallet || !buyerWallet) {
+              const { data: walletData, error: walletError } = await getWalletAddresses([
+                transaction.metadata?.seller_id,
+                transaction.metadata?.buyer_id,
+              ])
+              if (walletError) {
+                return { data: null, error: { message: 'Unable to resolve wallet addresses for NFT transfer.' } }
+              }
+              sellerWallet = sellerWallet || walletData?.[transaction.metadata?.seller_id]
+              buyerWallet  = buyerWallet  || walletData?.[transaction.metadata?.buyer_id]
+            }
+
+            if (!sellerWallet || !buyerWallet) {
+              return { data: null, error: { message: 'Missing seller or buyer wallet address for NFT transfer.' } }
+            }
+          }
+        }
+
+        // Single Freighter popup: completes escrow AND transfers NFT deed atomically
+        // (callerAddress is resolved internally by completeEscrowAndTransferNFT)
+        const batchResult = await completeEscrowAndTransferNFT(
+          transaction.metadata.escrow_transaction_id,
+          nftTokenId,
+          sellerWallet,
+          buyerWallet
+        )
+
+        // Store the NFT transfer hash for downstream Supabase sync
+        if (batchResult.nftHash) {
+          nftTransferHash = batchResult.nftHash
+        }
       } else if (status === 'failed') {
         await cancelEscrowOnChain(transaction.metadata.escrow_transaction_id)
       }
@@ -107,59 +160,15 @@ export const updateTransactionStatus = async (transactionId, status, userId) => 
     }
   }
 
-  let nftTransferHash = null
-  if (status === 'completed' && transaction.transaction_type === 'purchase' && transaction.property_id) {
-    const { data: property, error: propertyError } = await supabase
+  // If no escrow existed, or the NFT was already transferred in a prior call,
+  // fall back to fetching the existing hash from Supabase.
+  if (status === 'completed' && transaction.transaction_type === 'purchase' && transaction.property_id && !nftTransferHash) {
+    const { data: property } = await supabase
       .from('properties')
-      .select('id, nft_token_id, nft_transfer_tx_hash, title')
+      .select('nft_transfer_tx_hash')
       .eq('id', transaction.property_id)
       .single()
-
-    if (propertyError) {
-      return { data: null, error: { message: 'Unable to load property details for NFT transfer.' } }
-    }
-
-    if (property?.nft_token_id && !property?.nft_transfer_tx_hash) {
-      let sellerWallet = transaction.metadata?.seller_wallet
-      let buyerWallet = transaction.metadata?.buyer_wallet
-
-      if (!sellerWallet || !buyerWallet) {
-        const { data: walletData, error: walletError } = await getWalletAddresses([
-          transaction.metadata?.seller_id,
-          transaction.metadata?.buyer_id,
-        ])
-
-        if (walletError) {
-          return { data: null, error: { message: 'Unable to resolve wallet addresses for NFT transfer.' } }
-        }
-
-        sellerWallet = sellerWallet || walletData?.[transaction.metadata?.seller_id]
-        buyerWallet = buyerWallet || walletData?.[transaction.metadata?.buyer_id]
-      }
-
-      if (!sellerWallet || !buyerWallet) {
-        return { data: null, error: { message: 'Missing seller or buyer wallet address for NFT transfer.' } }
-      }
-
-      try {
-        const nftTransfer = await transferPropertyNFT(
-          property.nft_token_id,
-          sellerWallet,
-          buyerWallet
-        )
-        nftTransferHash = nftTransfer.hash
-      } catch (nftError) {
-        console.error('Failed to transfer property NFT:', nftError)
-        return {
-          data: null,
-          error: {
-            message: 'Funds may already be released, but the property NFT transfer failed. Please retry completion to finish the deed transfer.'
-          }
-        }
-      }
-    } else {
-      nftTransferHash = property?.nft_transfer_tx_hash || null
-    }
+    nftTransferHash = property?.nft_transfer_tx_hash || null
   }
 
   const { data, error } = await supabase
