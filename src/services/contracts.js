@@ -384,7 +384,7 @@ const invokeSoroban = async (contractId, method, args = []) => {
  * @param {Array<{contractId: string, method: string, args: any[]}>} calls
  * @returns {Promise<{ hash: string, returnValues: any[] }>}
  */
-const invokeSorobanBatch = async (calls) => {
+const _invokeSorobanBatch = async (calls) => {
   if (!calls || calls.length === 0) {
     throw new Error('invokeSorobanBatch requires at least one call')
   }

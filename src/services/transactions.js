@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import { completeEscrowOnChain, cancelEscrowOnChain, transferPropertyNFT, completeEscrowAndTransferNFT } from './contracts'
+import { cancelEscrowOnChain, completeEscrowAndTransferNFT } from './contracts'
 import * as StellarSdk from '@stellar/stellar-sdk'
 import { notifyPropertySold, notifyPropertyPurchased } from './notifications'
 import { getWalletAddresses } from './user'
