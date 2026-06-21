@@ -6,19 +6,22 @@
  * users exactly what they're signing and why.
  *
  * Props:
- *  isOpen       – boolean
- *  onClose      – () => void  (only allowed when not actively signing)
- *  onConfirm    – () => void  (called when user clicks the CTA button)
- *  step         – 'preview' | 'signing' | 'confirming' | 'success' | 'error'
- *  title        – modal heading
- *  description  – paragraph shown in the preview step
- *  actions      – array of { icon, label, detail } – bullet list of what will happen on-chain
- *  stepLabel    – e.g. "Step 2 of 4 · Seller"
- *  successTitle – heading shown on success
- *  successMsg   – body text shown on success
- *  txHash       – optional tx hash to show on success
- *  errorMsg     – error text shown on failure
- *  confirmText  – CTA button label (default "Sign in Freighter")
+ *  isOpen        – boolean
+ *  onClose       – () => void  (only allowed when not actively signing)
+ *  onConfirm     – () => void  (called when user clicks the CTA button)
+ *  step          – 'preview' | 'signing' | 'confirming' | 'success' | 'error'
+ *  title         – modal heading
+ *  description   – paragraph shown in the preview step
+ *  actions       – array of { icon, label, detail } – bullet list of what will happen on-chain
+ *  stepLabel     – e.g. "Step 2 of 4 · Seller"
+ *  signingStep   – current op index (1-based) while signing multi-op flows
+ *  signingTotal  – total number of ops in this flow
+ *  signingLabel  – human-readable label for the current op (from onProgress callback)
+ *  successTitle  – heading shown on success
+ *  successMsg    – body text shown on success
+ *  txHash        – optional tx hash to show on success
+ *  errorMsg      – error text shown on failure
+ *  confirmText   – CTA button label (default "Sign in Freighter")
  */
 
 const STEP_ICONS = {
@@ -70,6 +73,9 @@ const SigningProgressModal = ({
   description,
   actions = [],
   stepLabel,
+  signingStep = null,
+  signingTotal = null,
+  signingLabel = null,
   successTitle = 'Transaction Confirmed!',
   successMsg = 'The transaction was successfully broadcast to the Stellar network.',
   txHash,
@@ -172,8 +178,34 @@ const SigningProgressModal = ({
           {(step === 'signing' || step === 'confirming') && (
             <div className="text-center py-6">
               <Spinner />
+
+              {/* Multi-op step badge */}
+              {signingStep && signingTotal && signingTotal > 1 && (
+                <div className="flex items-center justify-center gap-2 mb-3">
+                  <div className="flex gap-1">
+                    {Array.from({ length: signingTotal }).map((_, i) => (
+                      <div
+                        key={i}
+                        className={`h-1.5 rounded-full transition-all duration-500 ${
+                          i + 1 < signingStep
+                            ? 'w-4 bg-indigo-600'
+                            : i + 1 === signingStep
+                            ? 'w-6 bg-indigo-600'
+                            : 'w-4 bg-indigo-100'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-xs font-bold text-indigo-600">
+                    Signature {signingStep} of {signingTotal}
+                  </span>
+                </div>
+              )}
+
               <h3 className="text-lg font-bold text-gray-900 mb-2">
-                {step === 'signing' ? 'Waiting for Freighter…' : 'Broadcasting to Stellar…'}
+                {step === 'signing'
+                  ? signingLabel || 'Waiting for Freighter…'
+                  : 'Broadcasting to Stellar…'}
               </h3>
               <p className="text-sm text-gray-500 max-w-xs mx-auto">
                 {step === 'signing'

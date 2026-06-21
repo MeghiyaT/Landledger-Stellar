@@ -75,7 +75,10 @@ const Dashboard = () => {
   const [processingTxId, setProcessingTxId] = useState(null)
 
   // Signing progress modals for offer-accept, escrow-create, and escrow-complete flows
-  const SIGNING_MODAL_INITIAL = { open: false, step: 'preview', txHash: null, errorMsg: null, pendingArgs: null }
+  const SIGNING_MODAL_INITIAL = {
+    open: false, step: 'preview', txHash: null, errorMsg: null, pendingArgs: null,
+    signingStep: null, signingTotal: null, signingLabel: null,
+  }
   const [offerSigningModal, setOfferSigningModal] = useState(SIGNING_MODAL_INITIAL)
   const [escrowSigningModal, setEscrowSigningModal] = useState(SIGNING_MODAL_INITIAL)
   const [completeSigningModal, setCompleteSigningModal] = useState(SIGNING_MODAL_INITIAL)
@@ -611,11 +614,16 @@ const Dashboard = () => {
               pendingArgs: { propData, buyerWallet, data },
             }))
 
-            // Single signature covers both the registry approve AND the NFT approve
+            // Sequential: 1 or 2 Freighter popups with live step indicator
+            const approveProgress = ({ step, total, label }) =>
+              setOfferSigningModal(prev => ({ ...prev, step: 'signing', signingStep: step, signingTotal: total, signingLabel: label }))
+
             const batchResult = await approveEscrowAndNFT(
               propData.blockchain_property_id,
               propData.nft_token_id || null,
-              buyerWallet
+              buyerWallet,
+              null,
+              approveProgress
             )
 
             setOfferSigningModal(prev => ({ ...prev, step: 'confirming' }))
@@ -776,10 +784,13 @@ const Dashboard = () => {
   }
 
   const executeCompleteTransaction = async () => {
-    const { transactionId } = completeSigningModal.pendingArgs
+    const { transactionId, transaction } = completeSigningModal.pendingArgs
     setCompleteSigningModal(prev => ({ ...prev, step: 'signing' }))
     try {
-      const { error: updateError } = await updateTransactionStatus(transactionId, 'completed', user.id)
+      const completeProgress = ({ step, total, label }) =>
+        setCompleteSigningModal(prev => ({ ...prev, step: 'signing', signingStep: step, signingTotal: total, signingLabel: label }))
+
+      const { error: updateError } = await updateTransactionStatus(transactionId, 'completed', user.id, completeProgress)
       if (updateError) {
         setCompleteSigningModal(prev => ({ ...prev, step: 'error', errorMsg: updateError.message || 'Please try again.' }))
         return
@@ -3642,6 +3653,9 @@ const Dashboard = () => {
         onConfirm={() => {}} // signing starts automatically on offer accept; modal shows progress only
         step={offerSigningModal.step}
         stepLabel="Step 2 of 4 · Seller"
+        signingStep={offerSigningModal.signingStep}
+        signingTotal={offerSigningModal.signingTotal}
+        signingLabel={offerSigningModal.signingLabel}
         title="Authorize Escrow & Deed Transfer"
         description="You're accepting a buyer's offer. One signature will authorize the escrow contract to manage the fund release and approve the NFT deed transfer to the buyer."
         actions={[
@@ -3695,6 +3709,9 @@ const Dashboard = () => {
         onConfirm={executeCompleteTransaction}
         step={completeSigningModal.step}
         stepLabel="Step 4 of 4 · Buyer"
+        signingStep={completeSigningModal.signingStep}
+        signingTotal={completeSigningModal.signingTotal}
+        signingLabel={completeSigningModal.signingLabel}
         title="Complete Purchase"
         description={completeSigningModal.pendingArgs?.transaction
           ? `This is the final step. Signing this transaction will release ${parseFloat(completeSigningModal.pendingArgs.transaction.amount).toLocaleString('en-IN', { maximumFractionDigits: 4 })} XLM to the seller and transfer the property deed to you.`

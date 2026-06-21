@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import { _completeEscrowOnChain, cancelEscrowOnChain, _transferPropertyNFT, completeEscrowAndTransferNFT } from './contracts'
+import { completeEscrowOnChain, cancelEscrowOnChain, transferPropertyNFT, completeEscrowAndTransferNFT } from './contracts'
 import * as StellarSdk from '@stellar/stellar-sdk'
 import { notifyPropertySold, notifyPropertyPurchased } from './notifications'
 import { getWalletAddresses } from './user'
@@ -52,7 +52,7 @@ export const createTransaction = async (transactionData) => {
   return { data, error }
 }
 
-export const updateTransactionStatus = async (transactionId, status, userId) => {
+export const updateTransactionStatus = async (transactionId, status, userId, onProgress = null) => {
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions')
     .select('*')
@@ -112,13 +112,14 @@ export const updateTransactionStatus = async (transactionId, status, userId) => 
           }
         }
 
-        // Single Freighter popup: completes escrow AND transfers NFT deed atomically
-        // (callerAddress is resolved internally by completeEscrowAndTransferNFT)
+        // Sequential Freighter popups: completes escrow THEN transfers NFT deed.
+        // onProgress fires between each op so the UI can show "Signature 1 of 2" etc.
         const batchResult = await completeEscrowAndTransferNFT(
           transaction.metadata.escrow_transaction_id,
           nftTokenId,
           sellerWallet,
-          buyerWallet
+          buyerWallet,
+          onProgress
         )
 
         // Store the NFT transfer hash for downstream Supabase sync

@@ -636,69 +636,67 @@ export const approvePropertyNFTTransfer = async (tokenId, approvedAddress, liveU
 }
 
 /**
- * Batch: Approve escrow for property transfer AND approve NFT deed transfer in one signature.
- * Replaces the two consecutive Freighter popups a seller gets when accepting a buyer's offer.
+ * Sequential: Approve escrow for property transfer AND approve NFT deed transfer.
  *
- * @param {string|number} propertyId        - On-chain property ID (u32)
- * @param {string|number} nftTokenId        - NFT token ID (u32), or null if no NFT exists yet
- * @param {string}        buyerWallet        - Buyer's Stellar public key
- * @param {number|null}   liveUntilLedger   - Optional ledger expiry for NFT approval
- * @returns {Promise<{ hash: string, escrowApprovalHash: string, nftApprovalHash: string }>}
+ * Soroban only allows ONE InvokeHostFunction operation per transaction, so these
+ * must be two separate Freighter signing popups. The onProgress callback lets the
+ * UI update its step indicator between the two signatures.
+ *
+ * @param {string|number} propertyId       - On-chain property ID (u32)
+ * @param {string|number} nftTokenId       - NFT token ID (u32), or null if no NFT exists yet
+ * @param {string}        buyerWallet      - Buyer's Stellar public key
+ * @param {number|null}   liveUntilLedger  - Optional ledger expiry for NFT approval
+ * @param {Function}      onProgress       - Called with step info: ({ step, total, label })
+ * @returns {Promise<{ escrowApprovalHash: string, nftApprovalHash: string|null }>}
  */
-export const approveEscrowAndNFT = async (propertyId, nftTokenId, buyerWallet, liveUntilLedger = null) => {
+export const approveEscrowAndNFT = async (
+  propertyId,
+  nftTokenId,
+  buyerWallet,
+  liveUntilLedger = null,
+  onProgress = null
+) => {
   const { PropertyRegistry, Escrow, PropertyNFT } = getContractAddresses()
   const safePropertyId = parseRequiredU32(propertyId, 'Property ID')
+  const hasNFT = !!(nftTokenId && buyerWallet)
+  const total = hasNFT ? 2 : 1
 
-  const calls = []
+  // ── Signature 1: Registry approve (always required) ──────────────────────
+  onProgress?.({ step: 1, total, label: 'Approving escrow authority over property deed…' })
+  console.log('[Soroban] Step 1 of', total, ': approving registry escrow')
+  const escrowResult = await invokeSoroban(PropertyRegistry, 'approve', [
+    nativeToScVal(safePropertyId, { type: 'u32' }),
+    nativeToScVal(Escrow, { type: 'address' }),
+  ])
 
-  // Always add the registry approve call
-  calls.push({
-    contractId: PropertyRegistry,
-    method: 'approve',
-    args: [
-      nativeToScVal(safePropertyId, { type: 'u32' }),
-      nativeToScVal(Escrow, { type: 'address' }),
-    ],
-  })
-
-  // Only add NFT approve if token exists and buyer wallet is known
-  if (nftTokenId && buyerWallet) {
-    const { address } = await getAddress()
-    const server = new rpc.Server(RPC_URL)
-    const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
-
-    let ledgerExpiry = liveUntilLedger
-    if (!ledgerExpiry) {
-      const latestLedger = await server.getLatestLedger()
-      ledgerExpiry = latestLedger.sequence + DEFAULT_NFT_APPROVAL_LEDGER_BUFFER
-    }
-
-    calls.push({
-      contractId: PropertyNFT,
-      method: 'approve',
-      args: [
-        nativeToScVal(address, { type: 'address' }),
-        nativeToScVal(buyerWallet, { type: 'address' }),
-        nativeToScVal(parsedTokenId, { type: 'u32' }),
-        nativeToScVal(ledgerExpiry, { type: 'u32' }),
-      ],
-    })
+  if (!hasNFT) {
+    return { hash: escrowResult.hash, escrowApprovalHash: escrowResult.hash, nftApprovalHash: null }
   }
 
-  if (calls.length === 1) {
-    // Only registry approve needed — use single invokeSoroban path (no NFT yet)
-    console.log('[Soroban] No NFT token yet — only approving escrow (single op)')
-    const result = await invokeSoroban(PropertyRegistry, 'approve', calls[0].args)
-    return { hash: result.hash, escrowApprovalHash: result.hash, nftApprovalHash: null }
+  // ── Signature 2: NFT approve (only when NFT exists) ──────────────────────
+  onProgress?.({ step: 2, total, label: 'Approving NFT deed transfer to buyer…' })
+  console.log('[Soroban] Step 2 of', total, ': approving NFT deed transfer')
+
+  const { address } = await getAddress()
+  const server = new rpc.Server(RPC_URL)
+  const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
+  let ledgerExpiry = liveUntilLedger
+  if (!ledgerExpiry) {
+    const latestLedger = await server.getLatestLedger()
+    ledgerExpiry = latestLedger.sequence + DEFAULT_NFT_APPROVAL_LEDGER_BUFFER
   }
 
-  // Both calls present — batch them into one signature
-  console.log('[Soroban:batch] Batching escrow approve + NFT approve into single signature')
-  const result = await invokeSorobanBatch(calls)
+  const nftResult = await invokeSoroban(PropertyNFT, 'approve', [
+    nativeToScVal(address, { type: 'address' }),
+    nativeToScVal(buyerWallet, { type: 'address' }),
+    nativeToScVal(parsedTokenId, { type: 'u32' }),
+    nativeToScVal(ledgerExpiry, { type: 'u32' }),
+  ])
+
   return {
-    hash: result.hash,
-    escrowApprovalHash: result.hash,
-    nftApprovalHash: result.hash,
+    hash: nftResult.hash,
+    escrowApprovalHash: escrowResult.hash,
+    nftApprovalHash: nftResult.hash,
   }
 }
 
@@ -717,68 +715,61 @@ export const transferPropertyNFT = async (tokenId, fromAddress, toAddress) => {
 }
 
 /**
- * Batch: Complete the escrow on-chain AND transfer the NFT deed to the buyer in one signature.
- * Replaces the two consecutive Freighter popups a buyer gets when finalising their purchase.
- * The caller (buyer) address is resolved internally from Freighter.
+ * Sequential: Complete the escrow on-chain AND transfer the NFT deed to the buyer.
+ *
+ * Soroban only allows ONE InvokeHostFunction per transaction, so these must be
+ * two separate Freighter popups. The onProgress callback lets the UI update its
+ * step indicator between the two signatures.
  *
  * @param {string|number} escrowTransactionId - On-chain escrow ID (u32)
  * @param {string|number} nftTokenId           - NFT token ID (u32), or null to skip NFT transfer
  * @param {string}        sellerWallet          - Seller's Stellar public key
  * @param {string}        buyerWallet           - Buyer's Stellar public key
- * @returns {Promise<{ hash: string, escrowHash: string, nftHash: string|null }>}
+ * @param {Function}      onProgress            - Called with ({ step, total, label })
+ * @returns {Promise<{ escrowHash: string, nftHash: string|null }>}
  */
 export const completeEscrowAndTransferNFT = async (
   escrowTransactionId,
   nftTokenId,
   sellerWallet,
-  buyerWallet
+  buyerWallet,
+  onProgress = null
 ) => {
   const { Escrow, PropertyNFT } = getContractAddresses()
   const safeTxId = parseRequiredU32(escrowTransactionId, 'Escrow transaction ID')
+  const hasNFT = !!(nftTokenId && sellerWallet && buyerWallet)
+  const total = hasNFT ? 2 : 1
 
   // Resolve the connected wallet as the caller (buyer completing the purchase)
   const { address: callerAddress } = await getAddress()
 
-  const calls = [
-    {
-      contractId: Escrow,
-      method: 'complete_escrow',
-      args: [
-        nativeToScVal(safeTxId, { type: 'u32' }),
-        nativeToScVal(callerAddress, { type: 'address' }),
-      ],
-    },
-  ]
+  // ── Signature 1: complete_escrow (always required) ───────────────────────
+  onProgress?.({ step: 1, total, label: 'Releasing funds from escrow to seller…' })
+  console.log('[Soroban] Step 1 of', total, ': completing escrow')
+  const escrowResult = await invokeSoroban(Escrow, 'complete_escrow', [
+    nativeToScVal(safeTxId, { type: 'u32' }),
+    nativeToScVal(callerAddress, { type: 'address' }),
+  ])
 
-  // Add NFT transfer only when there is a token to transfer
-  if (nftTokenId && sellerWallet && buyerWallet) {
-    const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
-    calls.push({
-      contractId: PropertyNFT,
-      method: 'transfer_from',
-      args: [
-        nativeToScVal(callerAddress, { type: 'address' }), // spender (buyer as approved operator)
-        nativeToScVal(sellerWallet, { type: 'address' }),  // from
-        nativeToScVal(buyerWallet, { type: 'address' }),   // to
-        nativeToScVal(parsedTokenId, { type: 'u32' }),
-      ],
-    })
+  if (!hasNFT) {
+    return { hash: escrowResult.hash, escrowHash: escrowResult.hash, nftHash: null }
   }
 
-  if (calls.length === 1) {
-    // No NFT — fall back to single invokeSoroban path
-    console.log('[Soroban] No NFT to transfer — only completing escrow (single op)')
-    const result = await invokeSoroban(Escrow, 'complete_escrow', calls[0].args)
-    return { hash: result.hash, escrowHash: result.hash, nftHash: null }
-  }
+  // ── Signature 2: transfer_from NFT ───────────────────────────────────────
+  onProgress?.({ step: 2, total, label: 'Transferring property NFT deed to your wallet…' })
+  console.log('[Soroban] Step 2 of', total, ': transferring NFT deed')
+  const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
+  const nftResult = await invokeSoroban(PropertyNFT, 'transfer_from', [
+    nativeToScVal(callerAddress, { type: 'address' }), // spender (buyer as approved operator)
+    nativeToScVal(sellerWallet, { type: 'address' }),  // from
+    nativeToScVal(buyerWallet, { type: 'address' }),   // to
+    nativeToScVal(parsedTokenId, { type: 'u32' }),
+  ])
 
-  // Both calls — batch into one Freighter signature
-  console.log('[Soroban:batch] Batching complete_escrow + NFT transfer_from into single signature')
-  const result = await invokeSorobanBatch(calls)
   return {
-    hash: result.hash,
-    escrowHash: result.hash,
-    nftHash: result.hash,
+    hash: nftResult.hash,
+    escrowHash: escrowResult.hash,
+    nftHash: nftResult.hash,
   }
 }
 
