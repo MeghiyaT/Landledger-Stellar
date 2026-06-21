@@ -176,6 +176,64 @@ Deno.serve(async (req: Request) => {
     console.log(`[mint-nft ${FUNCTION_VERSION}] property #${numericPropertyId} → ${ownerAddress}`);
 
     // -------------------------------------------------------------------
+    // Check if token already exists (Idempotency)
+    // -------------------------------------------------------------------
+    try {
+      const horizonResp = await fetch(`https://horizon-testnet.stellar.org/accounts/${adminAddress}`);
+      if (horizonResp.ok) {
+        const { sequence } = await horizonResp.json();
+        const { Account } = StellarSdk;
+        const account = new Account(adminAddress, sequence);
+        
+        const contract = new Contract(NFT_CONTRACT_ID);
+        const checkOp = contract.call(
+          "has_token",
+          nativeToScVal(numericPropertyId, { type: "u32" })
+        );
+        const txCheck = new TransactionBuilder(account, {
+          fee: String(Number(BASE_FEE) * 100),
+          networkPassphrase: NETWORK_PASSPHRASE,
+        }).addOperation(checkOp).setTimeout(180).build();
+        
+        const simResult = await rawRpc("simulateTransaction", { transaction: txCheck.toXDR() });
+        if (simResult.results && simResult.results.length > 0) {
+          const scVal = xdr.ScVal.fromXDR(simResult.results[0].xdr, "base64");
+          if (scVal.switch().name === "scvBool" && scVal.b() === true) {
+            console.log(`[mint-nft] Property #${numericPropertyId} already has a token. Fetching token ID...`);
+            const getOp = contract.call(
+              "get_token_by_property",
+              nativeToScVal(numericPropertyId, { type: "u32" })
+            );
+            const txGet = new TransactionBuilder(account, {
+              fee: String(Number(BASE_FEE) * 100),
+              networkPassphrase: NETWORK_PASSPHRASE,
+            }).addOperation(getOp).setTimeout(180).build();
+            const simResult2 = await rawRpc("simulateTransaction", { transaction: txGet.toXDR() });
+            
+            if (simResult2.results && simResult2.results.length > 0) {
+              const scVal2 = xdr.ScVal.fromXDR(simResult2.results[0].xdr, "base64");
+              if (scVal2.switch().name === "scvU32") {
+                const existingTokenId = scVal2.u32();
+                console.log(`[mint-nft] Returning existing token #${existingTokenId} for property #${numericPropertyId}`);
+                return json({
+                  success: true,
+                  txHash: "already-minted",
+                  tokenId: existingTokenId.toString(),
+                  contractId: NFT_CONTRACT_ID,
+                  admin: adminAddress,
+                  owner: ownerAddress,
+                  functionVersion: FUNCTION_VERSION,
+                });
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[mint-nft] Warning: failed to check for existing token", e);
+    }
+
+    // -------------------------------------------------------------------
     // Build the mint transaction
     // -------------------------------------------------------------------
     const contract = new Contract(NFT_CONTRACT_ID);
