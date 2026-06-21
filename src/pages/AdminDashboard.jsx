@@ -8,6 +8,8 @@ import {
   getRegistrationStats,
 } from '../services/admin'
 import { getAllProperties, adminRemoveProperty } from '../services/properties'
+import { registerPropertyOnChain } from '../services/contracts'
+import { updateRegistrationBlockchainData } from '../services/registrations'
 import Container from '../components/layout/Container'
 import Section from '../components/layout/Section'
 import Card from '../components/ui/Card'
@@ -143,9 +145,34 @@ const AdminDashboard = () => {
       console.log('Registration ID:', registrationId, 'Action type:', actionModal.type);
 
       switch (actionModal.type) {
-        case 'approve':
+        case 'approve': {
           result = await approveRegistration(registrationId, user.id, reviewNotes || null);
+
+          // Auto-mint title deed on Stellar as soon as registration is approved
+          if (result && !result.error) {
+            const reg = actionModal.registration;
+            try {
+              console.log('🔗 Auto-minting title deed for registration:', registrationId);
+              const blockchainResult = await registerPropertyOnChain(
+                reg.property_address || 'Verified Asset',
+                reg.property_address || 'Unknown Location',
+                0
+              );
+              if (blockchainResult.txHash) {
+                await updateRegistrationBlockchainData(
+                  registrationId,
+                  blockchainResult.propertyId,
+                  blockchainResult.txHash
+                );
+                console.log('✅ Title deed minted automatically. TX:', blockchainResult.txHash);
+              }
+            } catch (mintErr) {
+              // Non-fatal: approval already succeeded, minting can be retried manually
+              console.warn('⚠️ Auto-mint failed (approval still succeeded):', mintErr.message);
+            }
+          }
           break;
+        }
         case 'reject':
           if (!reviewNotes.trim()) {
             error('Review notes are required when rejecting a registration');
