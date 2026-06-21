@@ -680,6 +680,22 @@ export const approveEscrowAndNFT = async (
   const { address } = await getAddress()
   const server = new rpc.Server(RPC_URL)
   const parsedTokenId = parseRequiredU32(nftTokenId, 'NFT token ID')
+  
+  // Verify ownership before attempting to approve (prevents confusing WasmVm traps)
+  try {
+    const ownerAddress = await readSoroban(PropertyNFT, 'owner_of', [
+      nativeToScVal(parsedTokenId, { type: 'u32' })
+    ])
+    if (ownerAddress && ownerAddress !== address) {
+      throw new Error(`Connected wallet (${address.slice(0,4)}...${address.slice(-4)}) is not the owner of this NFT deed. The actual owner is ${ownerAddress.slice(0,4)}...${ownerAddress.slice(-4)}. Please switch accounts in Freighter.`)
+    }
+  } catch (err) {
+    if (err.message?.includes('not the owner')) {
+      throw err
+    }
+    console.warn('[Soroban] Could not verify NFT owner beforehand:', err.message)
+  }
+
   let ledgerExpiry = liveUntilLedger
   if (!ledgerExpiry) {
     const latestLedger = await server.getLatestLedger()

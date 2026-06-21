@@ -5,7 +5,7 @@ async function run() {
   try {
     const account = new Account('GAXGKGUCE7O5SYJHYYFMCP4DT5TEWHUPVKPGL2ZFXNJ2UG7MYYD7DFDX', "0")
     const tx = new TransactionBuilder(account, { fee: "100", networkPassphrase: Networks.TESTNET })
-      .addOperation(contract.call('owner_of', nativeToScVal(4, {type: 'u32'})))
+      .addOperation(contract.call('owner_of', nativeToScVal(1, {type: 'u32'})))
       .setTimeout(30)
       .build()
     
