@@ -30,17 +30,30 @@
 //! | `total_supply`        | Total tokens minted                                 |
 //! | `get_token_by_property` | Lookup token_id from property_id                  |
 //! | `has_token`           | Check if a property already has an NFT              |
+//! | `bump_token`          | Permissionless TTL refresh for a token's entries    |
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, Address, Env, String, Symbol,
 };
 
-// ── Type aliases (matching SEP-50 spec) ──────────────────────────────────────
+// ── Storage TTL constants ─────────────────────────────────────────────────────
+//
+// Stellar Testnet produces ~1 ledger every 5 seconds.
+// One year  ≈ 365 × 24 × 3600 / 5 = 6,307,200 ledgers.
+//
+// We extend_ttl(key, BUMP_THRESHOLD, BUMP_TO):
+//   • BUMP_THRESHOLD — only bump if current TTL is below this value
+//     (avoids paying fees on every call when TTL is already healthy).
+//   • BUMP_TO        — the new TTL in ledgers from *now*.
+//
+// With BUMP_TO = ~1 year and BUMP_THRESHOLD = ~6 months, we refresh on any
+// call made when fewer than 6 months remain, keeping entries alive indefinitely
+// as long as the property is accessed at least once every 6 months.
 
-// SEP-50 uses a generic `TokenID` unsigned integer.  We use `u32` which
-// covers all realistic property counts.
-// `u32` should be the same type as `TokenID` per the SEP-50 spec.
-
+/// ~6 months — minimum TTL remaining before we re-extend.
+const BUMP_THRESHOLD: u32 = 3_110_400;
+/// ~1 year — target TTL we extend to.
+const BUMP_TO: u32 = 6_307_200;
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -59,7 +72,7 @@ pub enum DataKey {
     PropertyToToken(u32),
     /// Whether a property already has a token minted.
     HasToken(u32),
-    /// Per-token approval: (token_id) → (approved_address, live_until_ledger).
+    /// Per-token approval: (token_id) → ApprovalEntry.
     Approval(u32),
     /// Per-owner operator approval: (owner, operator) → live_until_ledger.
     OperatorApproval(Address, Address),
@@ -67,13 +80,13 @@ pub enum DataKey {
     Balance(Address),
 }
 
-// ── Approval storage structs ──────────────────────────────────────────────────
+// ── Approval storage struct ───────────────────────────────────────────────────
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovalEntry {
     pub approved: Address,
-    /// Ledger number at which this approval expires (0 = revoked).
+    /// Ledger sequence number at which this approval expires (0 = revoked).
     pub live_until_ledger: u32,
 }
 
@@ -86,7 +99,7 @@ pub struct PropertyNft;
 impl PropertyNft {
     // ── Initialization ────────────────────────────────────────────────────────
 
-    /// Initialize the contract.  Must be called once after deployment.
+    /// Initialize the contract. Must be called once after deployment.
     pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("PropertyNft: already initialized");
@@ -110,15 +123,10 @@ impl PropertyNft {
     }
 
     /// Returns the metadata URI for `token_id`.
-    ///
-    /// The URI should point to a JSON file conforming to the SEP-50
-    /// "Non-Fungible Metadata JSON Schema" (with `name`, `description`,
-    /// `image`, `external_url`, `attributes` fields).
-    ///
     /// SEP-50 required: `fn token_uri(e: &Env, token_id: TokenID) -> String`
-    ///
     /// Panics if the token does not exist.
     pub fn token_uri(env: Env, token_id: u32) -> String {
+        Self::extend_token_ttl(&env, token_id);
         Self::assert_exists(&env, token_id);
         env.storage()
             .persistent()
@@ -126,7 +134,7 @@ impl PropertyNft {
             .unwrap_or(String::from_str(&env, ""))
     }
 
-    // ── SEP-50: u32 & Ownership ───────────────────────────────────────────
+    // ── SEP-50: Balance & Ownership ───────────────────────────────────────────
 
     /// Returns the number of tokens held by `owner`.
     /// SEP-50 required: `fn balance(e: &Env, owner: Address) -> u32`
@@ -138,9 +146,11 @@ impl PropertyNft {
     }
 
     /// Returns the owner of `token_id`.
-    /// Panics if the token does not exist.
+    /// Panics if the token does not exist or its storage has expired.
     /// SEP-50 required: `fn owner_of(e: &Env, token_id: TokenID) -> Address`
     pub fn owner_of(env: Env, token_id: u32) -> Address {
+        // Extend TTL before reading so the entry stays alive.
+        Self::extend_token_ttl(&env, token_id);
         env.storage()
             .persistent()
             .get(&DataKey::Owner(token_id))
@@ -149,15 +159,11 @@ impl PropertyNft {
 
     // ── SEP-50: Transfer ──────────────────────────────────────────────────────
 
-    /// Transfer `token_id` from `from` to `to`.  `from` must authorize.
-    ///
+    /// Transfer `token_id` from `from` to `to`. `from` must authorize.
     /// SEP-50 required: `fn transfer(e: &Env, from: Address, to: Address, token_id: TokenID)`
-    ///
-    /// Events (SEP-50 spec):
-    /// * topics – `["transfer", from: Address, to: Address]`
-    /// * data   – `token_id: TokenID`
     pub fn transfer(env: Env, from: Address, to: Address, token_id: u32) {
         from.require_auth();
+        Self::extend_token_ttl(&env, token_id);
         Self::assert_exists(&env, token_id);
 
         let owner: Address = env
@@ -170,20 +176,13 @@ impl PropertyNft {
             panic!("PropertyNft: from is not the token owner");
         }
 
-        Self::do_transfer(&env, from.clone(), to.clone(), token_id);
+        Self::do_transfer(&env, from, to, token_id);
     }
 
-    /// Transfer `token_id` from `from` to `to` using `spender`'s approval.
+    /// Transfer `token_id` on behalf of `from` using spender's approval.
     ///
-    /// `spender` must be:
-    /// * the per-token approved address (via `approve`), OR
-    /// * an approved operator for `from` (via `approve_for_all`).
-    ///
-    /// SEP-50 required: `fn transfer_from(e: &Env, spender: Address, from: Address, to: Address, token_id: TokenID)`
-    ///
-    /// Events (SEP-50 spec):
-    /// * topics – `["transfer", from: Address, to: Address]`
-    /// * data   – `token_id: TokenID`
+    /// `spender` must be the per-token approved address OR an approved operator.
+    /// SEP-50 required: `fn transfer_from(e, spender, from, to, token_id)`
     pub fn transfer_from(
         env: Env,
         spender: Address,
@@ -192,6 +191,7 @@ impl PropertyNft {
         token_id: u32,
     ) {
         spender.require_auth();
+        Self::extend_token_ttl(&env, token_id);
         Self::assert_exists(&env, token_id);
 
         let owner: Address = env
@@ -206,7 +206,6 @@ impl PropertyNft {
 
         let current_ledger = env.ledger().sequence();
 
-        // Check per-token approval.
         let token_approved = env
             .storage()
             .persistent()
@@ -214,7 +213,6 @@ impl PropertyNft {
             .map(|e| e.approved == spender && e.live_until_ledger >= current_ledger)
             .unwrap_or(false);
 
-        // Check operator approval (approve_for_all).
         let operator_approved = env
             .storage()
             .persistent()
@@ -226,7 +224,7 @@ impl PropertyNft {
             panic!("PropertyNft: spender is not approved");
         }
 
-        Self::do_transfer(&env, from.clone(), to.clone(), token_id);
+        Self::do_transfer(&env, from, to, token_id);
     }
 
     // ── SEP-50: Approvals ─────────────────────────────────────────────────────
@@ -234,14 +232,9 @@ impl PropertyNft {
     /// Approve `approved` to transfer `token_id` until `live_until_ledger`.
     ///
     /// * `approver` must be the token owner or a valid `approve_for_all` operator.
-    /// * Only one address can be approved per token at a time.
-    /// * To remove approval, approve your own address (or set live_until_ledger = 0).
+    /// * Set `live_until_ledger = 0` to revoke approval.
     ///
     /// SEP-50 required: `fn approve(e, approver, approved, token_id, live_until_ledger)`
-    ///
-    /// Events (SEP-50 spec):
-    /// * topics – `["approve", owner: Address, token_id: TokenID]`
-    /// * data   – `[approved: Address, live_until_ledger: u32]`
     pub fn approve(
         env: Env,
         approver: Address,
@@ -250,6 +243,11 @@ impl PropertyNft {
         live_until_ledger: u32,
     ) {
         approver.require_auth();
+
+        // CRITICAL: extend TTL *before* reading Owner — if the entry has expired,
+        // the extend_ttl will restore it from the archive (fee required on-chain),
+        // and only then can we read it safely.
+        Self::extend_token_ttl(&env, token_id);
         Self::assert_exists(&env, token_id);
 
         let owner: Address = env
@@ -258,7 +256,6 @@ impl PropertyNft {
             .get(&DataKey::Owner(token_id))
             .unwrap();
 
-        // Approver must be token owner OR a valid operator for the owner.
         let current_ledger = env.ledger().sequence();
         let is_operator = env
             .storage()
@@ -272,7 +269,6 @@ impl PropertyNft {
         }
 
         if live_until_ledger == 0 {
-            // Revoke approval.
             env.storage()
                 .persistent()
                 .remove(&DataKey::Approval(token_id));
@@ -287,6 +283,12 @@ impl PropertyNft {
                     live_until_ledger,
                 },
             );
+            // Keep the approval entry alive at least as long as live_until_ledger.
+            env.storage().persistent().extend_ttl(
+                &DataKey::Approval(token_id),
+                BUMP_THRESHOLD,
+                live_until_ledger.saturating_sub(current_ledger).max(BUMP_TO),
+            );
         }
 
         // SEP-50 event: topics ["approve", owner, token_id], data [approved, live_until_ledger]
@@ -296,23 +298,13 @@ impl PropertyNft {
         );
     }
 
-    /// Grant or revoke `operator` as an operator for all tokens owned by `owner`.
-    ///
-    /// Operators can call `transfer_from` on any token held by `owner` and can
-    /// call `approve` on behalf of `owner`.
-    ///
+    /// Grant or revoke `operator` approval over all tokens owned by `owner`.
     /// Set `live_until_ledger = 0` to revoke.
-    ///
     /// SEP-50 required: `fn approve_for_all(e, owner, operator, live_until_ledger)`
-    ///
-    /// Events (SEP-50 spec):
-    /// * topics – `["approve_for_all", owner: Address]`
-    /// * data   – `[operator: Address, live_until_ledger: u32]`
     pub fn approve_for_all(env: Env, owner: Address, operator: Address, live_until_ledger: u32) {
         owner.require_auth();
 
         if live_until_ledger == 0 {
-            // Revoke operator.
             env.storage()
                 .persistent()
                 .remove(&DataKey::OperatorApproval(owner.clone(), operator.clone()));
@@ -325,6 +317,11 @@ impl PropertyNft {
                 &DataKey::OperatorApproval(owner.clone(), operator.clone()),
                 &live_until_ledger,
             );
+            env.storage().persistent().extend_ttl(
+                &DataKey::OperatorApproval(owner.clone(), operator.clone()),
+                BUMP_THRESHOLD,
+                BUMP_TO,
+            );
         }
 
         // SEP-50 event: topics ["approve_for_all", owner], data [operator, live_until_ledger]
@@ -334,11 +331,9 @@ impl PropertyNft {
         );
     }
 
-    /// Returns the currently approved address for `token_id`, if any and not expired.
-    /// Panics if the token does not exist.
+    /// Returns the currently approved address for `token_id`, or None if expired/absent.
     /// SEP-50 required: `fn get_approved(e: &Env, token_id: TokenID) -> Option<Address>`
     pub fn get_approved(env: Env, token_id: u32) -> Option<Address> {
-        Self::assert_exists(&env, token_id);
         let current_ledger = env.ledger().sequence();
         env.storage()
             .persistent()
@@ -365,16 +360,12 @@ impl PropertyNft {
 
     // ── Landledger Extensions ─────────────────────────────────────────────────
 
-    /// Mint a new property deed NFT to `to`.
+    /// Mint a new NFT deed for a property (admin only).
     ///
-    /// * Admin-only.
     /// * Each `property_id` may only have **one** token minted.
-    /// * `token_uri` should point to a JSON file conforming to the SEP-50
-    ///   "Non-Fungible Metadata JSON Schema".
+    /// * `token_uri` should point to a JSON file conforming to the SEP-50 JSON schema.
     ///
-    /// SEP-50 Mint event:
-    /// * topics – `["mint", to: Address]`
-    /// * data   – `token_id: TokenID`
+    /// SEP-50 Mint event: topics `["mint", to]`, data `token_id`
     pub fn mint(
         env: Env,
         admin: Address,
@@ -397,13 +388,21 @@ impl PropertyNft {
         counter += 1;
         env.storage().instance().set(&DataKey::Counter, &counter);
 
-        // Store ownership and URI.
+        // Store ownership.
         env.storage()
             .persistent()
             .set(&DataKey::Owner(counter), &to);
         env.storage()
             .persistent()
+            .extend_ttl(&DataKey::Owner(counter), BUMP_THRESHOLD, BUMP_TO);
+
+        // Store URI.
+        env.storage()
+            .persistent()
             .set(&DataKey::Uri(counter), &token_uri);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Uri(counter), BUMP_THRESHOLD, BUMP_TO);
 
         // Update balance.
         let bal: u32 = env
@@ -414,6 +413,9 @@ impl PropertyNft {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &(bal + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(to.clone()), BUMP_THRESHOLD, BUMP_TO);
 
         // Store property → token mapping.
         env.storage()
@@ -421,7 +423,14 @@ impl PropertyNft {
             .set(&DataKey::PropertyToToken(property_id), &counter);
         env.storage()
             .persistent()
+            .extend_ttl(&DataKey::PropertyToToken(property_id), BUMP_THRESHOLD, BUMP_TO);
+
+        env.storage()
+            .persistent()
             .set(&DataKey::HasToken(property_id), &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::HasToken(property_id), BUMP_THRESHOLD, BUMP_TO);
 
         // SEP-50 mint event: topics ["mint", to], data token_id
         env.events()
@@ -438,6 +447,9 @@ impl PropertyNft {
         env.storage()
             .persistent()
             .set(&DataKey::Uri(token_id), &token_uri);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Uri(token_id), BUMP_THRESHOLD, BUMP_TO);
     }
 
     /// Total number of tokens minted.
@@ -460,14 +472,38 @@ impl PropertyNft {
             .has(&DataKey::HasToken(property_id))
     }
 
+    /// Permissionless TTL refresh for a token's core storage entries.
+    ///
+    /// Call this from the frontend before `approve` if the token's storage
+    /// may have expired/been archived. No auth required — anyone can keep a
+    /// token alive. This is the escape hatch for already-expired entries.
+    pub fn bump_token(env: Env, token_id: u32) {
+        Self::extend_token_ttl(&env, token_id);
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// Shared transfer logic: updates owner, balance, and clears per-token approval.
+    /// Extend TTL for all core storage entries of a token.
+    /// Using extend_ttl with a threshold means we only pay fees when TTL is
+    /// actually below the threshold — safe to call on every read/write.
+    fn extend_token_ttl(env: &Env, token_id: u32) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Owner(token_id), BUMP_THRESHOLD, BUMP_TO);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Uri(token_id), BUMP_THRESHOLD, BUMP_TO);
+    }
+
+    /// Shared transfer logic: updates ownership, balances, and clears approval.
     fn do_transfer(env: &Env, from: Address, to: Address, token_id: u32) {
-        // Update ownership.
+        // Update ownership with fresh TTL for the new owner entry.
         env.storage()
             .persistent()
             .set(&DataKey::Owner(token_id), &to);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Owner(token_id), BUMP_THRESHOLD, BUMP_TO);
 
         // Decrement sender balance.
         let from_bal: u32 = env
@@ -478,6 +514,9 @@ impl PropertyNft {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &from_bal.saturating_sub(1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(from.clone()), BUMP_THRESHOLD, BUMP_TO);
 
         // Increment receiver balance.
         let to_bal: u32 = env
@@ -488,8 +527,11 @@ impl PropertyNft {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &(to_bal + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(to.clone()), BUMP_THRESHOLD, BUMP_TO);
 
-        // Clear per-token approval (SEP-50: "The approval is cleared when the token is transferred").
+        // SEP-50: clear per-token approval on transfer.
         env.storage()
             .persistent()
             .remove(&DataKey::Approval(token_id));
