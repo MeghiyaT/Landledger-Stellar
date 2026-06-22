@@ -1875,8 +1875,9 @@ const Dashboard = () => {
                       >
                         View Transaction
                       </Button>
-                    </div>
-                  )}
+                      </div>
+                    )
+                  })()}
                 </React.Fragment>
               ))}
             </div>
