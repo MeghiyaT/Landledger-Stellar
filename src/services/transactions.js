@@ -197,7 +197,7 @@ export const updateTransactionStatus = async (transactionId, status, userId, onP
 
     if (propertyUpdateError) {
       console.error('Failed to sync sold property ownership in Supabase:', propertyUpdateError)
-      return { data: null, error: { message: 'The blockchain transfer succeeded, but the property record could not be updated in Supabase.' } }
+      return { data: null, error: { message: `The blockchain transfer succeeded, but the property record could not be updated in Supabase. Details: ${JSON.stringify(propertyUpdateError)}` } }
     }
 
     const updatedProperty = Array.isArray(syncResult) ? syncResult[0] : syncResult
