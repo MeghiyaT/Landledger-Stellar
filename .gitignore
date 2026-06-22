@@ -47,3 +47,4 @@ private-key.txt
 # Soroban/Stellar
 soroban-contracts/target/
 .agent/
+.vercel
