@@ -1773,7 +1773,7 @@ const Dashboard = () => {
                             </Button>
                           </>
                         ) : offer.status === 'accepted' ? (() => {
-                          const tx = transactions?.find(t => t.offer_id === offer.id)
+                          const tx = transactions?.find(t => t.metadata?.offer_id === offer.id)
                           const txStatus = tx?.status || 'pending'
                           const isEscrowReady = tx?.metadata?.escrow_ready
                           
@@ -1814,7 +1814,7 @@ const Dashboard = () => {
                   </div>
 
                   {offer.status === 'accepted' && (() => {
-                    const tx = transactions?.find(t => t.offer_id === offer.id)
+                    const tx = transactions?.find(t => t.metadata?.offer_id === offer.id)
                     const txStatus = tx?.status || 'pending'
                     const isEscrowReady = tx?.metadata?.escrow_ready
                     
