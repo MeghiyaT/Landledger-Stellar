@@ -689,28 +689,22 @@ export const approveEscrowAndNFT = async (
   // Verify ownership before attempting to approve (prevents confusing WasmVm traps).
   // We must confirm the connected wallet owns this token — if it does not, the contract
   // will panic with "approver is not owner" which surfaces as WasmVm InvalidAction.
-  try {
-    const ownerAddress = await readSoroban(PropertyNFT, 'owner_of', [
-      nativeToScVal(parsedTokenId, { type: 'u32' })
-    ])
-    if (ownerAddress && ownerAddress !== address) {
-      throw new Error(
-        `The wallet currently connected in Freighter (${address.slice(0,4)}...${address.slice(-4)}) ` +
-        `is not the owner of NFT deed #${parsedTokenId}. ` +
-        `The actual owner on-chain is ${ownerAddress.slice(0,4)}...${ownerAddress.slice(-4)}. ` +
-        `Please switch to the correct seller account in Freighter and try again.`
-      )
-    }
-    if (!ownerAddress) {
-      throw new Error(
-        `NFT deed #${parsedTokenId} does not appear to exist on-chain or has no owner recorded. ` +
-        `Ensure the NFT was minted before attempting the approval step.`
-      )
-    }
-  } catch (err) {
-    // Always rethrow — even a read failure should surface to the user rather than
-    // silently proceeding to a guaranteed WasmVm trap on-chain.
-    throw err
+  const ownerAddress = await readSoroban(PropertyNFT, 'owner_of', [
+    nativeToScVal(parsedTokenId, { type: 'u32' })
+  ])
+  if (ownerAddress && ownerAddress !== address) {
+    throw new Error(
+      `The wallet currently connected in Freighter (${address.slice(0,4)}...${address.slice(-4)}) ` +
+      `is not the owner of NFT deed #${parsedTokenId}. ` +
+      `The actual owner on-chain is ${ownerAddress.slice(0,4)}...${ownerAddress.slice(-4)}. ` +
+      `Please switch to the correct seller account in Freighter and try again.`
+    )
+  }
+  if (!ownerAddress) {
+    throw new Error(
+      `NFT deed #${parsedTokenId} does not appear to exist on-chain or has no owner recorded. ` +
+      `Ensure the NFT was minted before attempting the approval step.`
+    )
   }
 
   let ledgerExpiry = liveUntilLedger
