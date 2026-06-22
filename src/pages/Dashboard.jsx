@@ -1772,14 +1772,36 @@ const Dashboard = () => {
                               Decline
                             </Button>
                           </>
-                        ) : offer.status === 'accepted' ? (
-                          <div className="flex items-center gap-2 text-green-600 font-bold text-sm">
-                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                            </svg>
-                            Deal Established
-                          </div>
-                        ) : null}
+                        ) : offer.status === 'accepted' ? (() => {
+                          const tx = transactions?.find(t => t.offer_id === offer.id)
+                          const txStatus = tx?.status || 'pending'
+                          const isEscrowReady = tx?.metadata?.escrow_ready
+                          
+                          if (txStatus === 'pending') {
+                            return (
+                              <div className="flex items-center gap-2 text-yellow-600 font-bold text-sm">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                Waiting for Buyer Funding
+                              </div>
+                            )
+                          }
+                          if (txStatus === 'escrow_funded' && !isEscrowReady) {
+                            return (
+                              <div className="flex items-center gap-2 text-blue-600 font-bold text-sm">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                Step 1 Done — Approval Needed
+                              </div>
+                            )
+                          }
+                          return (
+                            <div className="flex items-center gap-2 text-green-600 font-bold text-sm">
+                              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                              </svg>
+                              Deal Established
+                            </div>
+                          )
+                        })() : null}
                       </div>
                       <Button
                         variant="ghost"
@@ -1791,10 +1813,29 @@ const Dashboard = () => {
                     </div>
                   </div>
 
-                  {offer.status === 'accepted' && (
-                    <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded">
-                      <p className="text-sm text-green-800 font-medium">Offer Accepted</p>
-                      <p className="text-xs text-green-700 mt-1">Transaction created! Check your Transaction History tab to manage the transaction.</p>
+                  {offer.status === 'accepted' && (() => {
+                    const tx = transactions?.find(t => t.offer_id === offer.id)
+                    const txStatus = tx?.status || 'pending'
+                    const isEscrowReady = tx?.metadata?.escrow_ready
+                    
+                    let title = "Offer Accepted"
+                    let desc = "Transaction created! Check your Transaction History tab to manage the transaction."
+                    let color = "green"
+                    
+                    if (txStatus === 'pending') {
+                      title = "Waiting for Buyer"
+                      desc = "The buyer needs to fund the escrow before you can proceed."
+                      color = "yellow"
+                    } else if (txStatus === 'escrow_funded' && !isEscrowReady) {
+                      title = "Action Required: On-Chain Approval"
+                      desc = "The buyer has funded the escrow. You must now approve the NFT transfer."
+                      color = "blue"
+                    }
+                    
+                    return (
+                      <div className={`mt-3 p-3 bg-${color}-50 border border-${color}-200 rounded`}>
+                        <p className={`text-sm text-${color}-800 font-medium`}>{title}</p>
+                        <p className={`text-xs text-${color}-700 mt-1`}>{desc}</p>
                       <Button
                         variant="outline"
                         size="sm"

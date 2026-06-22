@@ -3,6 +3,7 @@ import {
   Contract,
   BASE_FEE,
   nativeToScVal,
+  Address,
   rpc,
   xdr,
 } from '@stellar/stellar-sdk'
@@ -103,6 +104,14 @@ const scValToNative = (value) => {
       return value.b()
     case 'scvVoid':
       return null
+    case 'scvAddress':
+      // Decode an Address ScVal (account or contract) into its strkey string.
+      // Without this, owner_of returns a raw XDR object causing .slice() to crash.
+      try {
+        return Address.fromScVal(value).toString()
+      } catch {
+        return null
+      }
     default:
       return value
   }
