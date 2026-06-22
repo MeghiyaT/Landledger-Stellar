@@ -220,31 +220,6 @@ export const updateTransactionStatus = async (transactionId, status, userId, onP
       }
     }
 
-    // Fallback: ensure ownership_transfers has a record even if the RPC
-    // hasn't been updated with the migration yet. The RPC insert is the
-    // primary mechanism; this is a safety net. Duplicate inserts are harmless
-    // (the RPC and this JS code may both succeed — that's fine, we just get
-    // an extra row which is low-risk).
-    try {
-      await supabase
-        .from('ownership_transfers')
-        .insert({
-          property_id: transaction.property_id,
-          from_owner_id: sellerId,
-          to_owner_id: buyerId,
-          from_wallet: transaction.metadata?.seller_wallet || null,
-          to_wallet: transaction.metadata?.buyer_wallet || null,
-          transfer_type: 'sale',
-          transaction_id: transactionId,
-          blockchain_tx_hash: transaction.blockchain_tx_hash || null,
-          nft_transfer_tx_hash: nftTransferHash || null,
-        })
-    } catch (ownershipErr) {
-      // Non-fatal: the RPC may have already inserted the record, or the
-      // table may not exist yet. Either way, don't block the completion.
-      console.warn('Ownership transfer record fallback insert failed (non-fatal):', ownershipErr?.message)
-    }
-
     // Re-pin IPFS metadata with updated sale information (best-effort)
     try {
       const { data: propertyForIpfs } = await supabase
